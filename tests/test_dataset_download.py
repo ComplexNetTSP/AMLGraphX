@@ -53,6 +53,7 @@ def test_download_constructs_snapshot_arguments(
     assert downloader.download() == result.resolve()
     assert captured == {
         "repo_id": "owner/repo",
+        "repo_type": "dataset",
         "revision": "v1",
         "allow_patterns": ("*.csv",),
         "cache_dir": tmp_path / "cache",
