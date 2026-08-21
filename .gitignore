@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AMLGraphX local tooling, data, and experiment outputs
+.codex/
+.vscode/
+.idea/
+.DS_Store
+/data/
+/datasets/
+/downloads/
+/outputs/
+/artifacts/
+/checkpoints/
+/runs/
+/wandb/
+/mlruns/
+/logs/
