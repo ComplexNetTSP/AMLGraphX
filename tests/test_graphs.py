@@ -94,6 +94,21 @@ def test_account_graph_accepts_lazy_frames() -> None:
     ]
 
 
+def test_account_graph_preserves_string_timestamps() -> None:
+    """Account graph edges retain timestamp strings without parsing them."""
+    frame = pl.DataFrame(
+        {
+            "source": ["A"],
+            "target": ["B"],
+            "timestamp": ["2022/09/01 00:20"],
+        }
+    )
+
+    graph = build_account_graph(frame)
+
+    assert graph.edges["timestamp"].to_list() == ["2022/09/01 00:20"]
+
+
 def test_account_graph_requires_endpoints() -> None:
     """Missing endpoint columns produce a clear validation error."""
     with pytest.raises(ValueError, match="source account"):

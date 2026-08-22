@@ -205,6 +205,7 @@ class TransactionGraph:
             target_column=target_column,
             timestamp_column=timestamp_column,
             transaction_id_column=transaction_id_column,
+            parse_timestamp=True,
         )
         if "timestamp" not in frame.columns:
             raise ValueError(
@@ -333,6 +334,7 @@ def _prepare_transactions(
     target_column: str | None,
     timestamp_column: str | None = None,
     transaction_id_column: str | None = None,
+    parse_timestamp: bool = False,
 ) -> tuple[pl.DataFrame, str, str]:
     frame = _collect_frame(transactions)
     source = _resolve_required_column(
@@ -376,7 +378,7 @@ def _prepare_transactions(
         & (pl.col("target") != "")
     )
 
-    if timestamp_column is not None or _has_timestamp_column(frame.columns):
+    if parse_timestamp:
         timestamp = _resolve_required_column(
             frame.columns,
             timestamp_column,
@@ -494,10 +496,6 @@ def _resolve_optional_column(
 
 def _normalize_column(column: str) -> str:
     return " ".join(column.lower().replace("_", " ").replace(".", " ").split())
-
-
-def _has_timestamp_column(columns: Sequence[str]) -> bool:
-    return _resolve_optional_column(columns, None, _TIMESTAMP_ALIASES) is not None
 
 
 def _timestamp_expression(frame: pl.DataFrame, column: str) -> pl.Expr:
