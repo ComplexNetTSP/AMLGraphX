@@ -4,7 +4,7 @@ from bisect import bisect_right
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import polars as pl
 
@@ -54,6 +54,7 @@ _ACCOUNT_ID_ALIASES = (
 )
 
 _ROW_INDEX = "__amlgraphx_row_index"
+_TIMESTAMP_NS = "__amlgraphx_timestamp_ns"
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,17 +220,20 @@ class TransactionGraph:
         node_columns = [
             column
             for column in frame.columns
-            if column != _ROW_INDEX
+            if column not in {_ROW_INDEX, _TIMESTAMP_NS}
         ]
         nodes = frame.select(node_columns)
-        ordered = frame.sort(["timestamp", _ROW_INDEX])
+        ordered = frame.with_columns(
+            _timestamp_nanoseconds(frame).alias(_TIMESTAMP_NS)
+        ).sort([_TIMESTAMP_NS, _ROW_INDEX])
         rows = list(ordered.iter_rows(named=True))
+        delta_ns = _timedelta_to_nanoseconds(delta)
 
-        outgoing: dict[str, list[tuple[datetime, int]]] = {}
-        outgoing_times: dict[str, list[datetime]] = {}
+        outgoing: dict[str, list[tuple[int, int]]] = {}
+        outgoing_times: dict[str, list[int]] = {}
         for position, row in enumerate(rows):
             account = row[source]
-            timestamp = row["timestamp"]
+            timestamp = row[_TIMESTAMP_NS]
             outgoing.setdefault(account, []).append((timestamp, position))
             outgoing_times.setdefault(account, []).append(timestamp)
 
@@ -237,10 +241,11 @@ class TransactionGraph:
         for row in rows:
             candidates = outgoing.get(row[target], [])
             candidate_times = outgoing_times.get(row[target], [])
-            start = bisect_right(candidate_times, row["timestamp"])
+            timestamp = row[_TIMESTAMP_NS]
+            start = bisect_right(candidate_times, timestamp)
             end = bisect_right(
                 candidate_times,
-                row["timestamp"] + delta,
+                timestamp + delta_ns,
             )
             for _, successor_position in candidates[start:end]:
                 successor = rows[successor_position]
@@ -249,7 +254,7 @@ class TransactionGraph:
                         "source_transaction_id": row["transaction_id"],
                         "target_transaction_id": successor["transaction_id"],
                         "via_account": row[target],
-                        "time_delta": successor["timestamp"] - row["timestamp"],
+                        "time_delta_ns": successor[_TIMESTAMP_NS] - timestamp,
                     }
                 )
 
@@ -526,6 +531,20 @@ def _timestamp_expression(frame: pl.DataFrame, column: str) -> pl.Expr:
     return expression.cast(pl.Datetime, strict=False)
 
 
+def _timestamp_nanoseconds(frame: pl.DataFrame) -> pl.Expr:
+    time_unit = frame.schema["timestamp"].time_unit
+    scale = {"ms": 1_000_000, "us": 1_000, "ns": 1}[time_unit]
+    return pl.col("timestamp").cast(pl.Int64) * scale
+
+
+def _timedelta_to_nanoseconds(value: timedelta) -> int:
+    return (
+        value.days * 86_400_000_000_000_000
+        + value.seconds * 1_000_000_000
+        + value.microseconds * 1_000
+    )
+
+
 def _parse_datetime_strings(expression: pl.Expr) -> pl.Expr:
     normalized = expression.str.replace("T", " ")
     return pl.coalesce(
@@ -544,12 +563,14 @@ def _parse_datetime_strings(expression: pl.Expr) -> pl.Expr:
 
 def _transaction_edge_frame(records: list[dict[str, object]]) -> pl.DataFrame:
     if records:
-        return pl.DataFrame(records)
+        return pl.DataFrame(records).with_columns(
+            pl.duration(nanoseconds=pl.col("time_delta_ns")).alias("time_delta")
+        ).drop("time_delta_ns")
     return pl.DataFrame(
         {
             "source_transaction_id": pl.Series([], dtype=pl.String),
             "target_transaction_id": pl.Series([], dtype=pl.String),
             "via_account": pl.Series([], dtype=pl.String),
-            "time_delta": pl.Series([], dtype=pl.Duration("us")),
+            "time_delta": pl.Series([], dtype=pl.Duration("ns")),
         }
     )

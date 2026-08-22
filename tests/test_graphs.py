@@ -202,6 +202,37 @@ def test_transaction_graph_accepts_date_only_strings() -> None:
     assert graph.num_nodes == 1
 
 
+def test_transaction_graph_preserves_nanosecond_ordering() -> None:
+    """Sub-microsecond timestamps remain ordered and measurable."""
+    frame = pl.DataFrame(
+        {
+            "source": ["A", "B"],
+            "target": ["B", "C"],
+            "timestamp": [0, 500],
+        },
+        schema={"source": pl.String, "target": pl.String, "timestamp": pl.Datetime("ns")},
+    )
+
+    graph = build_transaction_graph(frame, delta=timedelta(microseconds=1))
+
+    assert graph.num_edges == 1
+    assert graph.edges["time_delta"].cast(pl.Int64).to_list() == [500]
+
+
+def test_transaction_graph_rejects_exceeded_delta() -> None:
+    """Successors beyond the inclusive time window are excluded."""
+    frame = _transaction_frame(
+        [
+            ("t1", "A", "B", "2025-01-01 09:00", 1.0, 0),
+            ("t2", "B", "C", "2025-01-01 10:01", 2.0, 0),
+        ]
+    )
+
+    graph = build_transaction_graph(frame, delta=timedelta(hours=1))
+
+    assert graph.num_edges == 0
+
+
 def test_transaction_graph_creates_directional_temporal_edges() -> None:
     """Transaction edges follow account direction and the inclusive window."""
     frame = _transaction_frame(
