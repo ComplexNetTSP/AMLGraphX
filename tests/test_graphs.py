@@ -73,6 +73,16 @@ def test_account_graph_joins_account_metadata() -> None:
     assert graph.nodes["Entity ID"].to_list() == ["e1", "e2"]
 
 
+def test_account_graph_strips_account_metadata_ids() -> None:
+    """Whitespace around metadata account IDs does not prevent a join."""
+    transactions = pl.DataFrame({"from": ["A"], "to": ["B"]})
+    accounts = pl.DataFrame({"Account Number": [" A ", " B "], "Bank ID": [1, 2]})
+
+    graph = build_account_graph(transactions, account_metadata=accounts)
+
+    assert graph.nodes["Bank ID"].to_list() == [1, 2]
+
+
 def test_account_graph_accepts_lazy_frames() -> None:
     """Account graph construction accepts a lazy Polars frame."""
     frame = pl.LazyFrame({"Account": ["A"], "Account.1": ["B"]})
@@ -157,6 +167,39 @@ def test_transaction_graph_combines_parsed_date_with_time() -> None:
 
     assert graph.num_edges == 1
     assert graph.edges["time_delta"].to_list() == [timedelta(minutes=30)]
+
+
+def test_transaction_graph_keeps_full_timestamp_when_date_also_exists() -> None:
+    """Full timestamps are not combined again with a separate date column."""
+    frame = pl.LazyFrame(
+        {
+            "source": ["A", "B"],
+            "target": ["B", "C"],
+            "Time": ["2025-01-01 09:00:00", "2025-01-01 09:30:00"],
+            "Date": ["2025-01-01", "2025-01-01"],
+        }
+    )
+
+    graph = build_transaction_graph(frame, delta=timedelta(hours=1))
+
+    assert graph.num_edges == 1
+    assert graph.edges["time_delta"].to_list() == [timedelta(minutes=30)]
+
+
+def test_transaction_graph_accepts_date_only_strings() -> None:
+    """Date-only timestamp columns retain their midnight timestamp."""
+    graph = build_transaction_graph(
+        pl.DataFrame(
+            {
+                "source": ["A"],
+                "target": ["B"],
+                "Date": ["2025-01-01"],
+            }
+        ),
+        delta=timedelta(hours=1),
+    )
+
+    assert graph.num_nodes == 1
 
 
 def test_transaction_graph_creates_directional_temporal_edges() -> None:

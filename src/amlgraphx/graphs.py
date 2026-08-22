@@ -445,7 +445,9 @@ def _join_account_metadata(
         "account metadata ID",
     )
     metadata = (
-        metadata.with_columns(pl.col(id_column).cast(pl.String).alias("node_id"))
+        metadata.with_columns(
+            pl.col(id_column).cast(pl.String).str.strip_chars().alias("node_id")
+        )
         .unique(subset=["node_id"], maintain_order=True)
     )
     if id_column != "node_id":
@@ -501,6 +503,7 @@ def _timestamp_expression(frame: pl.DataFrame, column: str) -> pl.Expr:
     if dtype == pl.Date:
         return expression.cast(pl.Datetime)
     if dtype == pl.String:
+        parsed_timestamp = _parse_datetime_strings(expression)
         date_column = _resolve_optional_column(
             frame.columns,
             None,
@@ -510,12 +513,33 @@ def _timestamp_expression(frame: pl.DataFrame, column: str) -> pl.Expr:
             date_only = pl.col(date_column).cast(pl.String).str.replace(
                 r"[T ].*$", ""
             )
-            return pl.concat_str(
-                [date_only, pl.col(column)],
-                separator=" ",
-            ).str.to_datetime(strict=False)
-        return expression.str.to_datetime(strict=False)
+            return pl.coalesce(
+                parsed_timestamp,
+                _parse_datetime_strings(
+                    pl.concat_str(
+                        [date_only, pl.col(column)],
+                        separator=" ",
+                    )
+                ),
+            )
+        return parsed_timestamp
     return expression.cast(pl.Datetime, strict=False)
+
+
+def _parse_datetime_strings(expression: pl.Expr) -> pl.Expr:
+    normalized = expression.str.replace("T", " ")
+    return pl.coalesce(
+        normalized.str.to_datetime(
+            format="%Y-%m-%d %H:%M:%S%.f",
+            strict=False,
+        ),
+        normalized.str.to_datetime(
+            format="%Y-%m-%d %H:%M:%S",
+            strict=False,
+        ),
+        normalized.str.to_datetime(format="%Y-%m-%d %H:%M", strict=False),
+        normalized.str.to_datetime(format="%Y-%m-%d", strict=False),
+    )
 
 
 def _transaction_edge_frame(records: list[dict[str, object]]) -> pl.DataFrame:
