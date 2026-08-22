@@ -1,6 +1,7 @@
 """Graph views built from AMLGraphX transaction tables."""
 
 from bisect import bisect_right
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -350,14 +351,9 @@ def _prepare_transactions(
         transaction_id_column,
         _TRANSACTION_ID_ALIASES,
     )
-    if id_column is None:
-        frame = frame.with_columns(
-            pl.format("tx_{}", pl.col(_ROW_INDEX)).alias("transaction_id")
-        )
-    else:
-        frame = frame.with_columns(
-            pl.col(id_column).cast(pl.String).alias("transaction_id")
-        )
+    frame = frame.with_columns(
+        _make_transaction_ids(frame, id_column).alias("transaction_id")
+    )
 
     frame = frame.with_columns(
         pl.col(source)
@@ -395,6 +391,44 @@ def _collect_frame(transactions: TransactionTable) -> pl.DataFrame:
     if isinstance(transactions, pl.DataFrame):
         return transactions.clone()
     raise TypeError("transactions must be a polars.DataFrame or polars.LazyFrame")
+
+
+def _make_transaction_ids(
+    frame: pl.DataFrame,
+    id_column: str | None,
+) -> pl.Series:
+    if id_column is None:
+        return pl.Series(
+            "transaction_id",
+            [f"tx_{row_index}" for row_index in frame[_ROW_INDEX].to_list()],
+            dtype=pl.String,
+        )
+
+    values = (
+        frame.get_column(id_column)
+        .cast(pl.String)
+        .str.strip_chars()
+        .to_list()
+    )
+    counts = Counter(value for value in values if value not in (None, ""))
+    used = {
+        value for value, count in counts.items() if count == 1 and value is not None
+    }
+    transaction_ids: list[str] = []
+    for row_index, value in zip(frame[_ROW_INDEX].to_list(), values, strict=True):
+        if value not in (None, "") and counts[value] == 1:
+            transaction_ids.append(value)
+            continue
+
+        candidate = f"tx_{row_index}"
+        suffix = 1
+        while candidate in used:
+            candidate = f"tx_{row_index}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        transaction_ids.append(candidate)
+
+    return pl.Series("transaction_id", transaction_ids, dtype=pl.String)
 
 
 def _join_account_metadata(
@@ -467,19 +501,20 @@ def _timestamp_expression(frame: pl.DataFrame, column: str) -> pl.Expr:
     if dtype == pl.Date:
         return expression.cast(pl.Datetime)
     if dtype == pl.String:
-        expression = expression.str.to_datetime(strict=False)
         date_column = _resolve_optional_column(
             frame.columns,
             None,
             ("date",),
         )
         if date_column is not None and date_column != column:
-            combined = pl.concat_str(
-                [pl.col(date_column).cast(pl.String), pl.col(column)],
+            date_only = pl.col(date_column).cast(pl.String).str.replace(
+                r"[T ].*$", ""
+            )
+            return pl.concat_str(
+                [date_only, pl.col(column)],
                 separator=" ",
             ).str.to_datetime(strict=False)
-            expression = pl.coalesce([expression, combined])
-        return expression
+        return expression.str.to_datetime(strict=False)
     return expression.cast(pl.Datetime, strict=False)
 
 

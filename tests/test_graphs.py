@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import polars as pl
 import pytest
 
+from amlgraphx.datasets import clean_lazy_frame
 from amlgraphx.graphs import (
     AccountGraph,
     TransactionGraph,
@@ -109,6 +110,53 @@ def test_graphs_generate_deterministic_transaction_ids() -> None:
     assert first.edges["transaction_id"].to_list() == second.edges[
         "transaction_id"
     ].to_list()
+
+
+def test_transaction_graph_repairs_null_and_duplicate_ids() -> None:
+    """Invalid source IDs become deterministic unique transaction IDs."""
+    frame = _transaction_frame(
+        [
+            ("duplicate", "A", "B", "2025-01-01 09:00", 1.0, 0),
+            ("duplicate", "B", "C", "2025-01-01 09:10", 2.0, 0),
+            (None, "C", "D", "2025-01-01 09:20", 3.0, 0),
+        ]
+    )
+
+    graph = build_transaction_graph(frame, delta=timedelta(hours=1))
+    node_ids = graph.nodes["transaction_id"].to_list()
+
+    assert node_ids == ["tx_0", "tx_1", "tx_2"]
+    assert len(node_ids) == len(set(node_ids))
+    assert all(value is not None for value in node_ids)
+    assert graph.edges.select(
+        ["source_transaction_id", "target_transaction_id"]
+    ).to_dicts() == [
+        {"source_transaction_id": "tx_0", "target_transaction_id": "tx_1"},
+        {"source_transaction_id": "tx_1", "target_transaction_id": "tx_2"},
+    ]
+
+
+def test_transaction_graph_combines_parsed_date_with_time() -> None:
+    """A parsed datetime date column combines correctly with a time string."""
+    frame = pl.LazyFrame(
+        {
+            "source": ["A", "B"],
+            "target": ["B", "C"],
+            "Time": ["09:00:00", "09:30:00"],
+            "Date": ["2025-01-01", "2025-01-01"],
+        }
+    )
+    cleaned = clean_lazy_frame(
+        frame,
+        source_column="source",
+        target_column="target",
+        timestamp_columns=("Date",),
+    )
+
+    graph = build_transaction_graph(cleaned, delta=timedelta(hours=1))
+
+    assert graph.num_edges == 1
+    assert graph.edges["time_delta"].to_list() == [timedelta(minutes=30)]
 
 
 def test_transaction_graph_creates_directional_temporal_edges() -> None:
