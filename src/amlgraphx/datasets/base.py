@@ -135,6 +135,7 @@ def clean_lazy_frame(
 _SOURCE_ALIASES = (
     "source",
     "sender",
+    "sender account",
     "from",
     "from account",
     "source id",
@@ -146,8 +147,12 @@ _SOURCE_ALIASES = (
 _TARGET_ALIASES = (
     "target",
     "receiver",
+    "receiver account",
     "to",
     "to account",
+    "account.1",
+    "account 1",
+    "account duplicated 0",
     "target id",
     "dst",
     "namedest",

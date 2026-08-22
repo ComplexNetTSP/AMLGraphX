@@ -51,7 +51,12 @@ def find_tabular_file(root: Path, preferred_terms: Sequence[str] = ()) -> Path:
     candidates = sorted(
         path
         for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".csv", ".parquet"}
+        if (
+            path.is_file()
+            and path.suffix.lower() in {".csv", ".parquet"}
+            and "__MACOSX" not in path.parts
+            and not path.name.startswith("._")
+        )
     )
     for term in preferred_terms:
         matches = [path for path in candidates if term.lower() in path.name.lower()]

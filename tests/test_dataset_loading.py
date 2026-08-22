@@ -1,5 +1,6 @@
 """Tests for cache, extraction, cleaning, and the unified loader."""
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -15,6 +16,7 @@ from amlgraphx.datasets import (
     extract_zip,
     load_dataset,
 )
+from amlgraphx.graphs import build_account_graph, build_transaction_graph
 
 
 def test_extract_zip_rejects_invalid_archive(tmp_path: Path) -> None:
@@ -84,3 +86,34 @@ def test_paysim_and_samld_loaders_use_dynamic_tabular_files(
         paysim_transactions.collect_schema().names()
     )
     assert isinstance(samld.transactions(), pl.LazyFrame)
+
+
+def test_paysim_transactions_support_both_graph_views(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """PaySim skips macOS resource files and exposes a logical timestamp."""
+    archive = tmp_path / "paysim.zip"
+    with ZipFile(archive, "w") as zip_file:
+        zip_file.writestr(
+            "paysim.csv",
+            "step,type,amount,nameOrig,nameDest,isFraud\n"
+            "1,PAYMENT,1,A,B,0\n"
+            "2,PAYMENT,2,B,C,1\n",
+        )
+        zip_file.writestr("__MACOSX/._paysim.csv", "not,a,csv\n")
+
+    monkeypatch.setattr(
+        "amlgraphx.datasets.download.hf_hub_download",
+        lambda **_: str(archive),
+    )
+    transactions = PaySim(cache_dir=tmp_path / "cache").transactions()
+
+    assert transactions.collect()["timestamp"].to_list() == [
+        datetime(1970, 1, 1, 1, tzinfo=UTC),
+        datetime(1970, 1, 1, 2, tzinfo=UTC),
+    ]
+    assert build_account_graph(transactions).num_edges == 2
+    assert build_transaction_graph(
+        transactions,
+        delta=timedelta(hours=1),
+    ).num_edges == 1

@@ -1,5 +1,6 @@
 """PaySim dataset adapter."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -86,11 +87,22 @@ class PaySim(Dataset):
         return find_tabular_file(self.download(), ("log", "paysim"))
 
     def transactions(self) -> pl.LazyFrame:
-        """Return lazily scanned and cleaned PaySim transactions."""
-        return clean_lazy_frame(
+        """Return lazily scanned PaySim transactions with a logical timestamp.
+
+        PaySim's ``step`` is a simulated hour. The added ``timestamp`` anchors
+        that hour sequence at the Unix epoch solely to support temporal graph
+        construction; the original ``step`` column remains unchanged.
+        """
+        frame = clean_lazy_frame(
             pl.scan_csv(self.transaction_path()),
             source_column="nameOrig",
             target_column="nameDest",
+        )
+        return frame.with_columns(
+            (
+                pl.lit(datetime(1970, 1, 1, tzinfo=UTC))
+                + pl.duration(hours=pl.col("step").cast(pl.Int64))
+            ).alias("timestamp")
         )
 
     def _dataset_root(self) -> Path:
