@@ -13,15 +13,32 @@ dependencies = [
     "polars>=1.43.2",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.4",
+    "snapml>=1.17.2",
+    "torch>=2.13.0",
+    "torch-geometric>=2.8.0.post1",
 ]
 
 [build-system]
-requires = ["uv_build>=0.12.5,<0.13.0"]
-build-backend = "uv_build"
+requires = ["maturin>=1.14,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "amlgraphx._core"
+python-source = "src"
 
 [dependency-groups]
 dev = [
+    "maturin>=1.14.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.4",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu132" }
