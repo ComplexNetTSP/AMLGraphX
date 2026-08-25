@@ -5,6 +5,7 @@ edition = "2021"
 
 [lib]
 name = "_core"
+path = "rust/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]

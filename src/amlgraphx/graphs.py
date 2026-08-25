@@ -114,18 +114,18 @@ class AccountGraph:
             transaction_id_column=transaction_id_column,
         )
 
-        edge_columns = [
-            column
-            for column in frame.columns
-            if column != _ROW_INDEX
-        ]
+        edge_columns = [column for column in frame.columns if column != _ROW_INDEX]
         edges = frame.select(edge_columns)
-        nodes = pl.concat(
-            [
-                frame.select(pl.col(source).alias("node_id")),
-                frame.select(pl.col(target).alias("node_id")),
-            ]
-        ).unique(subset=["node_id"], maintain_order=True).sort("node_id")
+        nodes = (
+            pl.concat(
+                [
+                    frame.select(pl.col(source).alias("node_id")),
+                    frame.select(pl.col(target).alias("node_id")),
+                ]
+            )
+            .unique(subset=["node_id"], maintain_order=True)
+            .sort("node_id")
+        )
 
         if account_metadata is not None:
             nodes = _join_account_metadata(
@@ -363,14 +363,8 @@ def _prepare_transactions(
     )
 
     frame = frame.with_columns(
-        pl.col(source)
-        .cast(pl.String)
-        .str.strip_chars()
-        .alias("source"),
-        pl.col(target)
-        .cast(pl.String)
-        .str.strip_chars()
-        .alias("target"),
+        pl.col(source).cast(pl.String).str.strip_chars().alias("source"),
+        pl.col(target).cast(pl.String).str.strip_chars().alias("target"),
     ).filter(
         pl.col("source").is_not_null()
         & (pl.col("source") != "")
@@ -411,12 +405,7 @@ def _make_transaction_ids(
             dtype=pl.String,
         )
 
-    values = (
-        frame.get_column(id_column)
-        .cast(pl.String)
-        .str.strip_chars()
-        .to_list()
-    )
+    values = frame.get_column(id_column).cast(pl.String).str.strip_chars().to_list()
     counts = Counter(value for value in values if value not in (None, ""))
     used = {
         value for value, count in counts.items() if count == 1 and value is not None
@@ -451,12 +440,9 @@ def _join_account_metadata(
         _ACCOUNT_ID_ALIASES,
         "account metadata ID",
     )
-    metadata = (
-        metadata.with_columns(
-            pl.col(id_column).cast(pl.String).str.strip_chars().alias("node_id")
-        )
-        .unique(subset=["node_id"], maintain_order=True)
-    )
+    metadata = metadata.with_columns(
+        pl.col(id_column).cast(pl.String).str.strip_chars().alias("node_id")
+    ).unique(subset=["node_id"], maintain_order=True)
     if id_column != "node_id":
         metadata = metadata.drop(id_column)
     return nodes.join(metadata, on="node_id", how="left")
@@ -513,9 +499,7 @@ def _timestamp_expression(frame: pl.DataFrame, column: str) -> pl.Expr:
             ("date",),
         )
         if date_column is not None and date_column != column:
-            date_only = pl.col(date_column).cast(pl.String).str.replace(
-                r"[T ].*$", ""
-            )
+            date_only = pl.col(date_column).cast(pl.String).str.replace(r"[T ].*$", "")
             return pl.coalesce(
                 parsed_timestamp,
                 _parse_datetime_strings(
@@ -561,9 +545,13 @@ def _parse_datetime_strings(expression: pl.Expr) -> pl.Expr:
 
 def _transaction_edge_frame(records: list[dict[str, object]]) -> pl.DataFrame:
     if records:
-        return pl.DataFrame(records).with_columns(
-            pl.duration(nanoseconds=pl.col("time_delta_ns")).alias("time_delta")
-        ).drop("time_delta_ns")
+        return (
+            pl.DataFrame(records)
+            .with_columns(
+                pl.duration(nanoseconds=pl.col("time_delta_ns")).alias("time_delta")
+            )
+            .drop("time_delta_ns")
+        )
     return pl.DataFrame(
         {
             "source_transaction_id": pl.Series([], dtype=pl.String),

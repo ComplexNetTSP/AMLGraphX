@@ -21,6 +21,7 @@ from .ibm_aml import IBMAML, IBMAMLVariant
 from .loader import load_dataset
 from .paysim import PaySim
 from .samld import SAML
+from .schema import normalize_transactions
 
 __all__ = [
     "DEFAULT_CACHE_ROOT",
@@ -40,5 +41,6 @@ __all__ = [
     "find_dataset_file",
     "find_tabular_file",
     "load_dataset",
+    "normalize_transactions",
     "validate_dataset_files",
 ]

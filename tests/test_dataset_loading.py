@@ -53,8 +53,7 @@ def _make_archive(tmp_path: Path, filename: str, csv_name: str) -> Path:
     with ZipFile(archive, "w") as zip_file:
         zip_file.writestr(
             f"root/{csv_name}",
-            "step,type,amount,nameOrig,nameDest,isFraud\n"
-            "1,PAYMENT,1,a,b,0\n",
+            "step,type,amount,nameOrig,nameDest,isFraud\n1,PAYMENT,1,a,b,0\n",
         )
     return archive
 
@@ -82,10 +81,24 @@ def test_paysim_and_samld_loaders_use_dynamic_tabular_files(
     assert isinstance(samld, SAML)
     paysim_transactions = paysim.transactions()
     assert isinstance(paysim_transactions, pl.LazyFrame)
-    assert {"type", "amount", "nameOrig", "nameDest", "isFraud"} <= set(
-        paysim_transactions.collect_schema().names()
-    )
-    assert isinstance(samld.transactions(), pl.LazyFrame)
+    assert {
+        "type",
+        "amount",
+        "nameOrig",
+        "nameDest",
+        "isFraud",
+        "transaction_id",
+        "source",
+        "target",
+        "label",
+    } <= set(paysim_transactions.collect_schema().names())
+    assert {
+        "transaction_id",
+        "source",
+        "target",
+        "amount",
+        "label",
+    } <= set(samld.transactions().collect_schema().names())
 
 
 def test_paysim_transactions_support_both_graph_views(
@@ -113,7 +126,10 @@ def test_paysim_transactions_support_both_graph_views(
         datetime(1970, 1, 1, 2, tzinfo=UTC),
     ]
     assert build_account_graph(transactions).num_edges == 2
-    assert build_transaction_graph(
-        transactions,
-        delta=timedelta(hours=1),
-    ).num_edges == 1
+    assert (
+        build_transaction_graph(
+            transactions,
+            delta=timedelta(hours=1),
+        ).num_edges
+        == 1
+    )

@@ -386,3 +386,572 @@ Use `memory_bank/progress.md` to preserve development continuity.
 For meaningful code changes:
 
 > **Analyze → implement → test → Ruff → update progress → commit → push.**
+
+
+
+## Rust and native acceleration
+
+AMLGraphX may use Rust for performance-critical internal implementations.
+
+Rust is an implementation backend, not the primary public interface of the library.
+
+The preferred architecture is:
+
+> stable Python public API → internal Python orchestration → Rust performance kernels
+
+Users should normally interact with Python APIs rather than importing low-level Rust bindings directly.
+
+Do not expose implementation-language details unnecessarily through the public API.
+
+Rust may be used when profiling or benchmarking shows that an operation benefits materially from native execution, especially for workloads involving:
+
+- large graph construction,
+- adjacency or sparse structure construction,
+- graph traversal,
+- temporal neighborhood sampling,
+- large-scale aggregation,
+- motif or pattern counting,
+- connected-component computation,
+- repeated graph indexing,
+- memory-intensive graph transformations,
+- CPU-bound loops,
+- high-volume transaction processing,
+- parallel graph operations.
+
+Do not rewrite functionality in Rust merely because Rust is available.
+
+Prefer:
+
+1. implement correct semantics,
+2. test them,
+3. benchmark,
+4. profile,
+5. identify the bottleneck,
+6. move only the performance-critical portion to Rust,
+7. verify semantic equivalence.
+
+If an existing optimized library such as Polars, NumPy, PyTorch, PyArrow, or another mature backend already performs the operation efficiently, do not reimplement it in Rust without demonstrated benefit.
+
+---
+
+## Python and Rust responsibility boundaries
+
+Keep responsibilities clear between Python and Rust.
+
+Python should normally remain responsible for:
+
+- public APIs,
+- configuration,
+- validation,
+- dataset interfaces,
+- orchestration,
+- error presentation,
+- interoperability with PyTorch and PyG,
+- Polars and PyArrow workflows,
+- high-level graph abstractions,
+- user-facing documentation.
+
+Rust should normally be responsible for narrowly scoped performance-critical kernels.
+
+Avoid moving high-level application logic into Rust unless there is a strong technical reason.
+
+Do not allow Rust implementation details to dictate awkward Python APIs.
+
+The Python interface should remain idiomatic, readable, and stable even if the native backend changes internally.
+
+---
+
+## Rust module design
+
+Do not place substantial implementations directly in the Rust extension entry point.
+
+Keep the extension entry point thin and primarily responsible for:
+
+- registering functions,
+- registering classes,
+- exposing native modules,
+- connecting Rust implementations to Python bindings.
+
+Organize substantial Rust functionality into focused modules based on domain responsibility.
+
+Prefer domain-oriented modules over generic collections of helpers.
+
+Good conceptual boundaries include:
+
+- graph construction,
+- graph storage,
+- adjacency structures,
+- temporal operations,
+- sampling,
+- traversal,
+- AML-specific structural algorithms,
+- aggregation,
+- indexing.
+
+Avoid generic modules with unclear responsibility such as:
+
+- `utils`,
+- `misc`,
+- `helpers`,
+- `common2`,
+- `new_core`.
+
+Do not create deep Rust module hierarchies before the implementation requires them.
+
+Start simple and reorganize when multiple related native kernels justify a dedicated module.
+
+---
+
+## Rust readability
+
+Rust code must remain understandable to contributors who primarily work in Python.
+
+Prefer straightforward, explicit Rust over highly abstract, macro-heavy, or overly clever implementations.
+
+Avoid unnecessary use of:
+
+- advanced lifetime abstractions,
+- custom macros,
+- complicated generic hierarchies,
+- unsafe Rust,
+- obscure iterator constructions,
+- premature zero-copy abstractions,
+- complex concurrency machinery.
+
+Use descriptive names and small focused functions.
+
+When Rust syntax or ownership requirements force a non-obvious implementation, add a short comment explaining the design reason rather than explaining basic Rust syntax.
+
+Do not optimize for minimum line count.
+
+Optimize for correctness, performance where needed, and maintainability.
+
+---
+
+## Unsafe Rust
+
+Avoid `unsafe` unless it is clearly justified by measurable performance or interoperability requirements.
+
+Before introducing `unsafe`:
+
+1. determine whether safe Rust is sufficient,
+2. document why `unsafe` is required,
+3. isolate the unsafe operation behind a small safe interface,
+4. define the invariants that make the operation sound,
+5. add tests covering relevant boundary conditions.
+
+Do not introduce `unsafe` solely to gain speculative performance improvements.
+
+---
+
+## Python–Rust boundary
+
+Crossing the Python–Rust boundary has overhead.
+
+Do not design native APIs that repeatedly transfer individual elements between Python and Rust.
+
+Prefer coarse-grained operations such as:
+
+> pass a collection or array → perform substantial work in Rust → return the result
+
+instead of:
+
+> Python loop → call Rust once per transaction or edge.
+
+Avoid unnecessary copying of large graph or transaction data when practical, but do not introduce complicated zero-copy designs until profiling shows that data transfer is a meaningful bottleneck.
+
+Preserve clear ownership and lifetime semantics at the boundary.
+
+---
+
+## Native API stability
+
+Treat low-level native bindings as internal implementation details unless explicitly designated public.
+
+Prefer Python wrappers around native functions.
+
+For example, the stable API should conceptually be:
+
+> public Python function → internal native implementation
+
+rather than requiring users to depend directly on the native extension.
+
+This allows the implementation to change between:
+
+- Python,
+- Rust,
+- C++,
+- GPU kernels,
+- external graph engines,
+
+without unnecessarily breaking users.
+
+If a native function replaces an existing Python implementation, preserve the existing observable behavior unless a behavior change is explicitly requested.
+
+---
+
+## Semantic equivalence for optimized implementations
+
+Performance optimization must not silently change scientific behavior.
+
+When replacing or accelerating an existing implementation with Rust, verify equivalence for relevant cases including:
+
+- graph direction,
+- node identity,
+- edge identity,
+- transaction ordering,
+- timestamp ordering,
+- duplicate transactions,
+- self-loops,
+- missing values,
+- temporal boundaries,
+- future-information exclusion,
+- sampling semantics,
+- deterministic behavior,
+- output types,
+- output shapes.
+
+Where floating-point computation is involved, use appropriate numerical tolerances instead of requiring unnecessary bitwise identity.
+
+---
+
+## Rust testing
+
+Meaningful Rust functionality should have Rust-side tests when appropriate.
+
+Use Rust unit tests for:
+
+- internal algorithms,
+- data structures,
+- edge cases,
+- invariants,
+- parsing or indexing logic,
+- native-only implementation details.
+
+Also add Python-level integration tests for functionality exposed through the Python API.
+
+Do not rely exclusively on Rust unit tests for native functionality that is consumed by Python.
+
+Python integration tests should verify that:
+
+- the native extension can be imported,
+- Python inputs are accepted correctly,
+- native outputs match documented behavior,
+- Python-facing exceptions are appropriate,
+- native and Python implementations agree when both exist.
+
+For optimized replacements, use shared deterministic fixtures whenever possible so the Python and Rust implementations can be compared directly.
+
+---
+
+## Rust validation
+
+For meaningful Rust changes, run the relevant native checks.
+
+At minimum, when applicable:
+
+```text
+cargo check
+cargo test
+cargo fmt --check
+cargo clippy
+```
+
+If the Rust code is exposed to Python, also rebuild or install the native extension through the repository's configured build workflow and run the relevant Python tests.
+
+A Rust change is not complete merely because `cargo check` succeeds.
+
+The Python integration must also work.
+
+If native compilation cannot be performed because of platform, toolchain, hardware, or environment limitations, report that explicitly.
+
+---
+
+## Rust dependencies
+
+Add Rust dependencies conservatively.
+
+Before introducing a new crate:
+
+1. determine whether the standard library or an existing dependency already solves the problem,
+2. verify that the crate is actively maintained and appropriate for library use,
+3. avoid pulling in large dependency trees for small functionality,
+4. avoid duplicate crates serving the same conceptual purpose.
+
+Prefer mature and well-maintained crates.
+
+Do not introduce a graph framework solely to avoid implementing a small graph kernel if doing so creates substantial architectural coupling.
+
+Keep native dependencies implementation-focused and avoid exposing crate-specific types through the Python public API.
+
+---
+
+## Parallelism
+
+Do not automatically parallelize Rust code.
+
+Parallel execution should be introduced when:
+
+- the workload is sufficiently large,
+- profiling shows meaningful benefit,
+- ordering semantics are preserved where required,
+- deterministic behavior remains understood,
+- memory usage remains acceptable.
+
+Be especially careful with temporal AML operations where parallel processing may accidentally violate transaction ordering or temporal constraints.
+
+Do not add parallelism that makes scientific behavior harder to reason about for negligible performance benefit.
+
+---
+
+## Memory and large graph workloads
+
+AMLGraphX may operate on graphs substantially larger than typical in-memory research examples.
+
+For native graph implementations, consider:
+
+- memory complexity,
+- unnecessary cloning,
+- duplicate representations,
+- integer width,
+- sparse storage,
+- allocation behavior,
+- streaming opportunities,
+- intermediate materialization.
+
+Avoid holding multiple full copies of large graph structures unless necessary.
+
+Prefer predictable memory behavior over micro-optimizations.
+
+When changing graph representations for performance reasons, preserve the Python-level semantics and document important limitations.
+
+---
+
+## Error handling across Rust and Python
+
+Do not use panics for normal user-facing errors.
+
+Convert expected failure conditions into appropriate Rust results and expose meaningful Python exceptions.
+
+Error messages should describe the user's problem rather than Rust implementation details.
+
+Do not expose messages such as internal indexing failures or low-level parsing state unless they are genuinely useful for debugging.
+
+Unexpected internal invariants may use stronger assertions where appropriate, but user input validation should produce controlled errors.
+
+---
+
+## Benchmark-driven optimization
+
+Performance claims must be supported by measurement.
+
+When implementing or replacing a performance-sensitive kernel:
+
+- benchmark representative workloads,
+- include realistic graph sizes when practical,
+- distinguish debug and optimized native builds,
+- avoid comparing optimized Rust builds against artificially inefficient Python baselines,
+- preserve identical semantics between implementations.
+
+Prefer measuring:
+
+- runtime,
+- peak or approximate memory usage,
+- scaling with nodes or edges,
+- scaling with transaction volume.
+
+Do not claim that an implementation is faster merely because it is written in Rust.
+
+---
+
+## Rust changes and CodeGraph
+
+Use CodeGraph for Python-side dependency and API analysis before introducing or changing native-backed behavior.
+
+When CodeGraph does not index Rust or cannot represent Python–Rust relationships completely, supplement CodeGraph analysis by inspecting:
+
+- Python wrappers,
+- native binding registrations,
+- relevant Rust modules,
+- associated tests.
+
+Do not assume that a native implementation is isolated merely because CodeGraph shows few Python dependencies.
+
+Always inspect the Python binding boundary when changing Rust-backed behavior.
+
+---
+
+## Completion requirements for native changes
+
+A meaningful Rust-backed code task is normally complete only when:
+
+- the intended Python-facing behavior is clear,
+- existing API compatibility has been considered,
+- the Rust implementation is complete,
+- Rust tests are added or updated when appropriate,
+- Python integration tests are added or updated when appropriate,
+- `cargo check` passes,
+- `cargo test` passes,
+- `cargo fmt --check` passes,
+- `cargo clippy` passes,
+- relevant Python tests pass,
+- Ruff passes for affected Python code,
+- performance-sensitive changes are benchmarked when performance is the purpose of the change,
+- documentation is updated when public behavior changes,
+- progress memory is updated for meaningful completed work.
+
+Performance optimization is not complete until correctness has been verified.
+
+---
+
+## Rust development principle
+
+Rust exists to accelerate AMLGraphX, not to redefine AMLGraphX around Rust.
+
+Prefer:
+
+> Python-first public design, native-backed performance.
+
+Keep the boundary replaceable.
+
+Keep native kernels focused.
+
+Keep semantics testable.
+
+Keep optimization evidence-based.
+
+When uncertain whether functionality belongs in Python or Rust, implement or preserve it in Python unless profiling, scale, memory behavior, or algorithmic requirements provide a clear reason for native implementation.
+
+
+### Rust extension entry point
+
+Keep `src/lib.rs` as a thin PyO3 extension entry point.
+
+Its primary responsibilities are:
+
+- declaring Rust modules,
+- registering Python-exposed functions and classes,
+- constructing the native Python module,
+- wiring Rust implementations to Python bindings.
+
+Do not place substantial graph algorithms, sampling logic, data structures, or performance kernels directly in `src/lib.rs`.
+
+Implement substantial functionality in dedicated Rust modules and register those functions or classes through `src/lib.rs`.
+
+As the Rust backend grows, `src/lib.rs` should remain small and easy to inspect.
+
+
+
+
+## Rust build and validation workflow
+
+Whenever Rust source code is added, modified, moved, or deleted, rebuild the native extension before considering the task complete.
+
+Use the following workflow:
+
+1. Check Rust compilation:
+
+```text
+cargo check
+```
+
+2. Run Rust tests:
+
+```text
+cargo test
+```
+
+3. Check Rust formatting:
+
+```text
+cargo fmt --check
+```
+
+If formatting fails, run:
+
+```text
+cargo fmt
+```
+
+and check again.
+
+4. Run Rust linting:
+
+```text
+cargo clippy
+```
+
+Fix warnings introduced by the change when they are relevant to the modified code.
+
+5. Rebuild the Python native extension:
+
+```text
+uv run maturin develop
+```
+
+This step is required after Rust code changes so that Python uses the newly compiled native implementation.
+
+Do not assume that Python is using the latest Rust code until `uv run maturin develop` has completed successfully.
+
+6. If the task concerns performance, benchmarking, or production-like native execution, also build the optimized version:
+
+```text
+uv run maturin develop --release
+```
+
+Use release builds for performance measurements. Do not benchmark Rust performance using only the default debug build.
+
+7. Verify Python import and integration.
+
+Run the relevant Python tests after rebuilding the native extension:
+
+```text
+uv run pytest
+```
+
+For focused changes, run the most relevant targeted tests first, then run the broader suite when practical.
+
+8. Run Python linting and formatting checks when Python wrappers or interfaces were changed:
+
+```text
+uv run ruff check .
+uv run ruff format --check .
+```
+
+If formatting is required:
+
+```text
+uv run ruff format .
+```
+
+9. Update `memory_bank/progress.md` after a meaningful Rust-backed module or feature is completed.
+
+10. Only after all relevant validation passes should Git commit and push operations proceed.
+
+The normal Rust-backed development sequence is:
+
+> **CodeGraph analysis → edit Rust/Python → cargo check → cargo test → cargo fmt --check → cargo clippy → maturin develop → Python tests → Ruff → update progress → commit → push**
+
+If only Python code changed and no Rust source, Rust module declaration, native binding, Cargo dependency, or PyO3 registration changed, rebuilding with Maturin is not required.
+
+If any of the following changes, rebuild with Maturin:
+
+- Rust source files,
+- Rust module declarations,
+- PyO3 functions or classes,
+- native module registration,
+- Cargo dependencies affecting the extension,
+- Python–Rust binding definitions.
+
+For performance-related work, use:
+
+> **correctness build first → validate → release build → benchmark**
+
+Never treat a successful `cargo check` alone as proof that the Python-facing Rust extension works.
+
+
+As the native backend grows, do not centralize all PyO3 registrations in `src/lib.rs`.
+
+Each substantial Rust module should expose a small `register(...)` function responsible for registering its own Python-exposed functions or classes.
+
+`src/lib.rs` should delegate registration to module-level registration functions and remain a thin top-level composition layer.

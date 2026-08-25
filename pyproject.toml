@@ -24,7 +24,7 @@ build-backend = "maturin"
 
 [tool.maturin]
 bindings = "pyo3"
-module-name = "amlgraphx._core"
+module-name = "amlgraphx._native._core"
 python-source = "src"
 
 [dependency-groups]

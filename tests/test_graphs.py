@@ -132,9 +132,10 @@ def test_graphs_generate_deterministic_transaction_ids() -> None:
     second = build_account_graph(frame)
 
     assert first.edges["transaction_id"].to_list() == ["tx_0", "tx_1"]
-    assert first.edges["transaction_id"].to_list() == second.edges[
-        "transaction_id"
-    ].to_list()
+    assert (
+        first.edges["transaction_id"].to_list()
+        == second.edges["transaction_id"].to_list()
+    )
 
 
 def test_transaction_graph_repairs_null_and_duplicate_ids() -> None:
@@ -225,7 +226,11 @@ def test_transaction_graph_preserves_nanosecond_ordering() -> None:
             "target": ["B", "C"],
             "timestamp": [0, 500],
         },
-        schema={"source": pl.String, "target": pl.String, "timestamp": pl.Datetime("ns")},
+        schema={
+            "source": pl.String,
+            "target": pl.String,
+            "timestamp": pl.Datetime("ns"),
+        },
     )
 
     graph = build_transaction_graph(frame, delta=timedelta(microseconds=1))

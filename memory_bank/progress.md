@@ -1,6 +1,6 @@
 # AMLGraphX 当前进度
 
-更新时间：2026-08-22
+更新时间：2026-08-25
 
 ## Git 状态
 
@@ -100,6 +100,16 @@ patterns = dataset.patterns()
 - 账户元数据 join 前会清理 ID 两侧空白。
 - 同时存在 `Date` 和 `Time` 时，优先保留完整时间戳，再组合日期与 time-only 字段。
 
+### Canonical transaction schema
+
+位置：`src/amlgraphx/datasets/schema.py`
+
+- `normalize_transactions()` 为数据集增加统一的 `transaction_id`、`source`、`target`、`timestamp`、`amount` 和 `label` 字段。
+- 原始字段保持不变，数据集特有字段继续保留。
+- 支持 IBM AML 的 `Account_duplicated_0`、PaySim 的 `nameOrig`/`nameDest`、SAML-D 的 `Sender_account`/`Receiver_account` 等实际字段别名。
+- SAML-D 的 `Date` 与 time-only `Time` 会组合为完整时间戳。
+- 已添加合成 schema 测试，并完成 IBM AML、PaySim、SAML-D 的真实下载 smoke test；真实数据均使用临时目录并在测试后删除。
+
 ## 真实数据验证
 
 所有真实下载都使用 `/tmp` 下独立的 `TemporaryDirectory`，每个数据集验证完成后确认临时目录已删除；没有把真实数据提交到仓库。
@@ -128,8 +138,9 @@ patterns = dataset.patterns()
 
 ## 自动化验证
 
-- `uv run pytest`：32 passed
+- `uv run pytest`：38 passed
 - `uv run ruff check .`：通过
+- `uv run ruff format --check src tests`：通过
 - `git diff --check`：通过
 
 ## 后续建议
