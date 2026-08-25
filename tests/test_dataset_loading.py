@@ -16,7 +16,7 @@ from amlgraphx.datasets import (
     extract_zip,
     load_dataset,
 )
-from amlgraphx.graphs import build_account_graph, build_transaction_graph
+from amlgraphx.graph.graphs import build_account_graph, build_transaction_graph
 
 
 def test_extract_zip_rejects_invalid_archive(tmp_path: Path) -> None:

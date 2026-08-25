@@ -149,3 +149,22 @@ patterns = dataset.patterns()
 - 复用 `Dataset`、`DatasetMetadata`、`HuggingFaceDownloader` 和 `clean_lazy_frame`，不要为单个数据集重复实现下载与清洗框架。
 - 新适配器至少应有 metadata、下载路径、LazyFrame 交易读取和合成小文件测试。
 - 如果需要新的图语义，应继续扩展独立 graph builder，而不是把图构建逻辑塞进 dataset adapter。
+
+## Temporal transaction graph data module
+
+位置：`src/amlgraphx/data/`
+
+- canonical transaction schema 的实现已从 `datasets/schema.py` 移至
+  `data/schema.py`；`datasets` 继续导出 `normalize_transactions()`，旧模块保留轻量兼容导入。
+- `TransactionGraphDataModule` 按“完整事务图 → 时间诱导切分 → split 内滑动窗口”组织数据。
+- `split_transaction_graph()` 使用半开时间区间建立 train、validation 和 test
+  诱导子图，并删除跨 split 的边。
+- `sliding_snapshots()` 支持独立的 `window_size`、`stride` 和
+  `drop_last`，窗口使用 `[start_time, end_time)` 语义。
+- `GraphSnapshot.edge_index` 使用 PyG 风格的 `[2, E]` 局部节点索引，不构造
+  dense adjacency matrix；节点和边属性继续保留为 Polars 表。
+- 新增 temporal split、跨区间边隔离、滑动窗口、稀疏边索引和配置校验测试。
+- 自动化验证：`42 passed`，Ruff lint 与 `src tests` format check 通过。
+- 真实数据验证使用独立临时目录并在完成后删除：PaySim 为
+  `6,362,620 / 56`（节点/边），IBM HI-Small 为
+  `5,078,345 / 2,176,494`；两个数据集均完成 split 和 snapshot smoke test。

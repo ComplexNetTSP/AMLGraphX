@@ -4,6 +4,8 @@ from pathlib import Path
 
 import polars as pl
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -13,7 +15,6 @@ from .base import (
     clean_lazy_frame,
 )
 from .download import DEFAULT_CACHE_ROOT, HuggingFaceDownloader, find_tabular_file
-from .schema import normalize_transactions
 
 _REPO_ID = "LordNR/AMLGraphX-SAML-D"
 _ARCHIVE = "SAML-D.zip"

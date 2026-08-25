@@ -5,6 +5,8 @@ from pathlib import Path
 
 import polars as pl
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -18,7 +20,6 @@ from .download import (
     HuggingFaceDownloader,
     find_tabular_file,
 )
-from .schema import normalize_transactions
 
 _REPO_ID = "LordNR/AMLGraphX-Paysim"
 _ARCHIVE = "paysim.zip"

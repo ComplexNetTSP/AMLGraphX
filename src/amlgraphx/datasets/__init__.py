@@ -1,5 +1,7 @@
 """Dataset interfaces, adapters, and loading entry points for AMLGraphX."""
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -21,7 +23,6 @@ from .ibm_aml import IBMAML, IBMAMLVariant
 from .loader import load_dataset
 from .paysim import PaySim
 from .samld import SAML
-from .schema import normalize_transactions
 
 __all__ = [
     "DEFAULT_CACHE_ROOT",

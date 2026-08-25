@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 
 from amlgraphx.datasets import clean_lazy_frame
-from amlgraphx.graphs import (
+from amlgraphx.graph.graphs import (
     AccountGraph,
     TransactionGraph,
     build_account_graph,

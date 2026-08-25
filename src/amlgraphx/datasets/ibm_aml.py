@@ -6,6 +6,8 @@ from typing import Literal
 
 import polars as pl
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -20,7 +22,6 @@ from .download import (
     find_dataset_file,
     validate_dataset_files,
 )
-from .schema import normalize_transactions
 
 IBMAMLVariant = Literal[
     "hi-small",

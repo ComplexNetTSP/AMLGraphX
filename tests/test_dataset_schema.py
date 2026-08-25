@@ -3,7 +3,7 @@
 import polars as pl
 import pytest
 
-from amlgraphx.datasets import normalize_transactions
+from amlgraphx.data import normalize_transactions
 
 
 def test_normalize_transactions_adds_canonical_columns() -> None:
