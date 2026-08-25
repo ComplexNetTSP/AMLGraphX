@@ -168,3 +168,15 @@ patterns = dataset.patterns()
 - 真实数据验证使用独立临时目录并在完成后删除：PaySim 为
   `6,362,620 / 56`（节点/边），IBM HI-Small 为
   `5,078,345 / 2,176,494`；两个数据集均完成 split 和 snapshot smoke test。
+
+## 双语代码注释与 Polars 说明
+
+位置：`src/amlgraphx/graph/graphs.py`、`src/amlgraphx/data/`
+
+- 为账户图、交易图、schema 统一和 temporal snapshot 流程补充中英文模块说明、
+  类/函数 docstring 及关键算法注释。
+- 在实际使用位置解释了 `pl.col`、`with_columns`、`filter`、`select`、
+  `join`（包括 `semi`/`inner`/`left`）、`unique`、`coalesce`、`concat_str`、
+  `collect_schema` 和 `LazyFrame.collect()`，并加入小例子。
+- 未改变运行逻辑；验证结果为 `42 passed`，相关 Ruff 检查和
+  `git diff --check` 通过。
