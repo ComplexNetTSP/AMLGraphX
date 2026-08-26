@@ -62,11 +62,12 @@ impl NativeGraphFeaturePreprocessor {
         features: PyReadonlyArray2<'_, f64>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let rows = copy_rows(features)?;
+        let batch_start_sequence = self.state.next_sequence();
         self.state
             .insert_batch(rows.iter().cloned(), &self.config)
             .map_err(PyValueError::new_err)?;
         let width = rows.first().map_or(0, Vec::len);
-        let output = py.allow_threads(|| self.parallel_transform(&rows));
+        let output = py.allow_threads(|| self.parallel_transform(&rows, batch_start_sequence));
         let output = output.map_err(PyRuntimeError::new_err)?;
         to_numpy(py, output, width)
     }
@@ -79,11 +80,12 @@ impl NativeGraphFeaturePreprocessor {
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let rows = copy_rows(features)?;
         self.state.clear();
+        let batch_start_sequence = self.state.next_sequence();
         self.state
             .insert_batch(rows.iter().cloned(), &self.config)
             .map_err(PyValueError::new_err)?;
         let width = rows.first().map_or(0, Vec::len);
-        let output = py.allow_threads(|| self.parallel_transform(&rows));
+        let output = py.allow_threads(|| self.parallel_transform(&rows, batch_start_sequence));
         let output = output.map_err(PyRuntimeError::new_err)?;
         to_numpy(py, output, width)
     }
@@ -95,13 +97,22 @@ impl NativeGraphFeaturePreprocessor {
 }
 
 impl NativeGraphFeaturePreprocessor {
-    fn parallel_transform(&self, rows: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, String> {
+    fn parallel_transform(
+        &self,
+        rows: &[Vec<f64>],
+        batch_start_sequence: u64,
+    ) -> Result<Vec<Vec<f64>>, String> {
         let computation = catch_unwind(AssertUnwindSafe(|| {
             self.pool.install(|| {
                 rows.par_iter()
                     .map(|row| {
                         let mut enriched = row.clone();
-                        enriched.extend(engineered_features(&self.state, row, &self.config)?);
+                        enriched.extend(engineered_features(
+                            &self.state,
+                            row,
+                            batch_start_sequence,
+                            &self.config,
+                        )?);
                         Ok(enriched)
                     })
                     .collect::<Result<Vec<_>, String>>()

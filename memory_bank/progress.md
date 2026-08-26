@@ -207,3 +207,23 @@ patterns = dataset.patterns()
   IBM LI-Small 各执行 512 条、4 个 batch 的 smoke test，三者均返回
   `(512, 182)` 且所有数值有限。真实 ZIP、解压数据和缓存均在 `/tmp` 临时目录
   中使用后删除。
+
+## GFP paper / SnapML compatibility review
+
+位置：`rust/tabular/`、`tests/test_tabular_graph_features.py`、
+`examples/graph_feature_preprocessor_ibm_aml.py`
+
+- 通过 MarkItDown 审阅 GFP 论文、IBM Z AML 参考流水线，以及 venv 中 SnapML
+  1.17.2 的 `GraphFeaturePreprocessor` 包装层。确认公共 API、128 行 batch、
+  预热 `fit`、动态多重图和“写入串行 / 不可变图并行读取”的总体设计一致。
+- 修正了与 SnapML 的三个可复现边界差异：fan/degree 对等时间戳的并发前缀、
+  pattern window 按候选事件而非 batch 最大时间戳滑动，以及跨 batch 同时刻事件
+  只作为历史图状态而不重复发射模式；账户 ratio 采用 SnapML 的 `degree / fan`。
+  新增三个基于 SnapML 的确定性回归测试，tabular 测试现为 11 passed。
+- 发布一个端到端的中英双语注释示例：下载 IBM HI-Small、惰性加载 canonical
+  transactions、统一账户 ID、GFP history warm-up 和 128-row transform batch；
+  严格因果 `transform_causal()` 的速度/泄漏权衡也在示例中说明。
+- release 实测（4,000 条高连接度交易、fan+degree）：1 worker 4.0224 s，4 workers
+  1.0100 s（3.98x）；每实例 Rayon pool 的 OS 线程数同时增加，验证 native 多线程
+  实际生效。最终验证：Rust `cargo test` 5 passed、Clippy `-D warnings` 通过、
+  Python 全套 53 passed、Ruff check 通过、`git diff --check` 通过。

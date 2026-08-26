@@ -26,7 +26,7 @@ pub(crate) struct IncidentEdge {
     pub(crate) id: EdgeId,
     pub(crate) neighbour: VertexId,
     pub(crate) timestamp: f64,
-    sequence: u64,
+    pub(crate) sequence: u64,
 }
 
 type NeighbourEdges = HashMap<VertexId, VecDeque<EdgeId>>;
@@ -236,6 +236,11 @@ impl GraphState {
     /// Return the number of active edges without exposing mutable internals.
     pub(crate) fn edge_count(&self) -> usize {
         self.edges.len()
+    }
+
+    /// Return the insertion sequence assigned to the next batch edge.
+    pub(crate) fn next_sequence(&self) -> u64 {
+        self.next_sequence
     }
 
     fn neighbors(

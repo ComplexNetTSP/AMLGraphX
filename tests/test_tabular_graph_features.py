@@ -95,6 +95,79 @@ def test_matches_snapml_for_random_simple_multigraph_free_batches() -> None:
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
 
 
+def test_matches_snapml_for_parallel_edges_with_equal_timestamps() -> None:
+    """Concurrent multigraph events use SnapML's timestamp-group semantics."""
+    features = np.array(
+        [
+            [1, 1, 9, 1, 10],
+            [2, 2, 9, 2, 20],
+            [3, 1, 9, 2, 30],
+            [4, 3, 9, 2, 40],
+        ],
+        dtype=np.float64,
+    )
+    params = _params(
+        **{
+            "scatter-gather": False,
+            "temp-cycle": False,
+            "lc-cycle": False,
+        }
+    )
+
+    expected = _transform_with(SnapMLGraphFeaturePreprocessor, features, params)
+    actual = _transform_with(GraphFeaturePreprocessor, features, params)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_matches_snapml_for_per_event_pattern_windows() -> None:
+    """Pattern windows follow each event, not the largest batch timestamp."""
+    features = np.array(
+        [[1, 1, 9, 1], [2, 2, 9, 9], [3, 3, 9, 11], [4, 4, 9, 19]],
+        dtype=np.float64,
+    )
+    params = _params(
+        vertex_stats=False,
+        fan_tw=10,
+        degree_tw=10,
+        **{
+            "scatter-gather": False,
+            "temp-cycle": False,
+            "lc-cycle": False,
+        },
+    )
+
+    expected = _transform_with(SnapMLGraphFeaturePreprocessor, features, params)
+    actual = _transform_with(GraphFeaturePreprocessor, features, params)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_matches_snapml_for_equal_timestamps_across_batches() -> None:
+    """Earlier batches contribute graph state but not a second concurrent emission."""
+    history = np.array([[1, 2, 6, 13], [2, 5, 2, 14]], dtype=np.float64)
+    batch = np.array([[3, 2, 5, 13], [4, 3, 4, 15]], dtype=np.float64)
+    params = _params(
+        vertex_stats=False,
+        **{
+            "scatter-gather": False,
+            "temp-cycle": False,
+            "lc-cycle": False,
+        },
+    )
+
+    expected = SnapMLGraphFeaturePreprocessor()
+    actual = GraphFeaturePreprocessor()
+    expected.set_params(params)
+    actual.set_params(params)
+    expected.transform(history)
+    actual.transform(history)
+
+    np.testing.assert_allclose(
+        actual.transform(batch), expected.transform(batch), rtol=1e-12, atol=1e-12
+    )
+
+
 def test_transform_causal_excludes_later_rows_in_its_input_batch() -> None:
     """Strict causal mode never lets the first star edge observe later rows."""
     features = np.array([[1, 1, 2, 1], [2, 1, 3, 2], [3, 1, 4, 3]], dtype=np.float64)

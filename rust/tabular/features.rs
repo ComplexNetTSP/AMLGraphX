@@ -1,6 +1,6 @@
 //! Read-only graph pattern and account-statistic feature extraction.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     config::{Config, PatternConfig},
@@ -11,6 +11,7 @@ use super::{
 pub(crate) fn engineered_features(
     state: &GraphState,
     row: &[f64],
+    batch_start_sequence: u64,
     config: &Config,
 ) -> Result<Vec<f64>, String> {
     if row.len() < 4 {
@@ -34,6 +35,7 @@ pub(crate) fn engineered_features(
             source,
             target,
             latest,
+            batch_start_sequence,
             &config.fan,
         );
     }
@@ -45,6 +47,7 @@ pub(crate) fn engineered_features(
             source,
             target,
             latest,
+            batch_start_sequence,
             &config.degree,
         );
     }
@@ -82,12 +85,13 @@ pub(crate) fn engineered_features(
         ));
     }
     if config.vertex_stats {
-        append_vertex_statistics(&mut output, state, row, source, target, latest, config)?;
+        append_vertex_statistics(&mut output, state, row, source, target, config)?;
     }
     Ok(output)
 }
 
 /// Append target fan-in and source fan-out as bucketed one-hot features.
+#[allow(clippy::too_many_arguments)]
 fn append_fan_features(
     output: &mut Vec<f64>,
     state: &GraphState,
@@ -95,15 +99,17 @@ fn append_fan_features(
     source: VertexId,
     target: VertexId,
     latest: f64,
+    batch_start_sequence: u64,
     config: &PatternConfig,
 ) {
-    let cutoff = latest - config.time_window;
+    let _ = latest;
     output.extend(prefix_pattern_histogram(
         state,
         edge_id,
         target,
         false,
-        cutoff,
+        config.time_window,
+        batch_start_sequence,
         &config.bins,
         true,
     ));
@@ -112,13 +118,15 @@ fn append_fan_features(
         edge_id,
         source,
         true,
-        cutoff,
+        config.time_window,
+        batch_start_sequence,
         &config.bins,
         true,
     ));
 }
 
 /// Append target in-degree and source out-degree histogram buckets.
+#[allow(clippy::too_many_arguments)]
 fn append_degree_features(
     output: &mut Vec<f64>,
     state: &GraphState,
@@ -126,15 +134,17 @@ fn append_degree_features(
     source: VertexId,
     target: VertexId,
     latest: f64,
+    batch_start_sequence: u64,
     config: &PatternConfig,
 ) {
-    let cutoff = latest - config.time_window;
+    let _ = latest;
     output.extend(prefix_pattern_histogram(
         state,
         edge_id,
         target,
         false,
-        cutoff,
+        config.time_window,
+        batch_start_sequence,
         &config.bins,
         false,
     ));
@@ -143,7 +153,8 @@ fn append_degree_features(
         edge_id,
         source,
         true,
-        cutoff,
+        config.time_window,
+        batch_start_sequence,
         &config.bins,
         false,
     ));
@@ -151,71 +162,76 @@ fn append_degree_features(
 
 /// Encode the growing fan/degree patterns that contain the current edge.
 ///
-/// SnapML records one pattern for every chronological prefix of a vertex's
-/// incident edge sequence. A transaction therefore belongs to all prefixes
-/// ending at or after its own position, rather than only one final degree.
-/// Fans use the first transaction to each distinct neighbour; degrees use every
-/// parallel edge. This detail matters for multi-row batches and multigraphs.
+/// SnapML groups transactions with an equal timestamp into one concurrent
+/// prefix. For each later timestamp group, its pattern uses the preceding
+/// ``time_window`` and contributes once per physical edge to every current
+/// edge still in that window. This avoids inventing an order for simultaneous
+/// transactions while preserving streaming-window semantics.
+#[allow(clippy::too_many_arguments)]
 fn prefix_pattern_histogram(
     state: &GraphState,
     edge_id: u64,
     vertex: VertexId,
     outgoing: bool,
-    cutoff: f64,
+    time_window: f64,
+    batch_start_sequence: u64,
     bins: &[usize],
     fan: bool,
 ) -> Vec<f64> {
-    let incident = state.incident_edges(vertex, outgoing, cutoff);
+    let incident = state.incident_edges(vertex, outgoing, f64::NEG_INFINITY);
     let mut histogram = vec![0.0; bins.len()];
     if incident.is_empty() {
         return histogram;
     }
 
-    let (current_rank, pattern_count) = if fan {
-        fan_rank_and_count(&incident, edge_id)
-    } else {
-        degree_rank_and_count(&incident, edge_id)
-    };
-    let Some(rank) = current_rank else {
+    let Some(current_timestamp) = incident
+        .iter()
+        .find(|edge| edge.id == edge_id)
+        .map(|edge| edge.timestamp)
+    else {
         return histogram;
     };
-    for size in rank.max(2)..=pattern_count {
-        increment_bucket(&mut histogram, size, bins);
+
+    let mut left = 0;
+    let mut index = 0;
+    let mut degree = 0;
+    let mut neighbours: HashMap<VertexId, usize> = HashMap::new();
+    while index < incident.len() {
+        let timestamp = incident[index].timestamp;
+        let mut end = index;
+        while end < incident.len() && incident[end].timestamp.total_cmp(&timestamp).is_eq() {
+            degree += 1;
+            if fan {
+                *neighbours.entry(incident[end].neighbour).or_default() += 1;
+            }
+            end += 1;
+        }
+        while left < end && incident[left].timestamp <= timestamp - time_window {
+            degree -= 1;
+            if fan {
+                let neighbour = incident[left].neighbour;
+                let count = neighbours
+                    .get_mut(&neighbour)
+                    .expect("active incident edge has a neighbour count");
+                *count -= 1;
+                if *count == 0 {
+                    neighbours.remove(&neighbour);
+                }
+            }
+            left += 1;
+        }
+        if timestamp >= current_timestamp && timestamp - current_timestamp < time_window {
+            let size = if fan { neighbours.len() } else { degree };
+            for _ in incident[index..end]
+                .iter()
+                .filter(|edge| edge.sequence >= batch_start_sequence)
+            {
+                increment_bucket(&mut histogram, size, bins);
+            }
+        }
+        index = end;
     }
     histogram
-}
-
-/// Return the physical edge rank and degree-pattern size for one edge.
-fn degree_rank_and_count(
-    incident: &[super::state::IncidentEdge],
-    edge_id: u64,
-) -> (Option<usize>, usize) {
-    (
-        incident
-            .iter()
-            .position(|edge| edge.id == edge_id)
-            .map(|index| index + 1),
-        incident.len(),
-    )
-}
-
-/// Return the neighbour-prefix rank and fan-pattern size for one edge.
-fn fan_rank_and_count(
-    incident: &[super::state::IncidentEdge],
-    edge_id: u64,
-) -> (Option<usize>, usize) {
-    let current = incident.iter().find(|edge| edge.id == edge_id);
-    let Some(current) = current else {
-        return (None, 0);
-    };
-    let mut neighbours = HashSet::new();
-    let mut rank = None;
-    for edge in incident {
-        if neighbours.insert(edge.neighbour) && edge.neighbour == current.neighbour {
-            rank = Some(neighbours.len());
-        }
-    }
-    (rank, neighbours.len())
 }
 
 /// Enumerate scatter-gather patterns in both roles of the current edge.
@@ -426,7 +442,6 @@ fn append_vertex_statistics(
     row: &[f64],
     source: VertexId,
     target: VertexId,
-    latest: f64,
     config: &Config,
 ) -> Result<(), String> {
     for column in &config.vertex_stats_cols {
@@ -436,14 +451,13 @@ fn append_vertex_statistics(
             ));
         }
     }
-    let cutoff = latest - config.vertex_stats_tw;
     for (vertex, outgoing) in [
         (source, true),
         (source, false),
         (target, true),
         (target, false),
     ] {
-        append_one_vertex_statistics(output, state, vertex, outgoing, cutoff, config);
+        append_one_vertex_statistics(output, state, vertex, outgoing, f64::NEG_INFINITY, config);
     }
     Ok(())
 }
@@ -458,10 +472,10 @@ fn append_one_vertex_statistics(
     config: &Config,
 ) {
     let (fan, degree) = state.fan_and_degree(vertex, outgoing, cutoff);
-    let ratio = if degree == 0 {
+    let ratio = if fan == 0 {
         0.0
     } else {
-        fan as f64 / degree as f64
+        degree as f64 / fan as f64
     };
     append_selected_structural_statistics(output, &config.vertex_stats_feats, fan, degree, ratio);
 
