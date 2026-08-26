@@ -233,3 +233,11 @@ __marimo__/
 /mlruns/
 /logs/
 /docs/
+
+# Rust / PyO3 / maturin
+target/
+*.pyd
+*.dll
+*.dylib
+*.rs.bk
+*.whl

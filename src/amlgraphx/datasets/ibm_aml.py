@@ -6,6 +6,8 @@ from typing import Literal
 
 import polars as pl
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -163,11 +165,19 @@ class IBMAML(Dataset):
     def transactions(self) -> pl.LazyFrame:
         """Return lazily scanned and conservatively cleaned transactions."""
         frame = pl.scan_csv(self.transaction_path())
-        return clean_lazy_frame(
+        frame = clean_lazy_frame(
             frame,
             source_column="Account",
             target_column="Account.1",
             timestamp_columns=("Timestamp",),
+        )
+        return normalize_transactions(
+            frame,
+            source_column="Account",
+            target_column="Account.1",
+            timestamp_column="Timestamp",
+            amount_column="Amount Received",
+            label_column="Is Laundering",
         )
 
     def accounts(self) -> pl.LazyFrame:

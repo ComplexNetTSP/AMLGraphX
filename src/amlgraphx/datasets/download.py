@@ -67,7 +67,9 @@ def find_tabular_file(root: Path, preferred_terms: Sequence[str] = ()) -> Path:
     raise FileNotFoundError(f"No CSV or Parquet dataset file found in {root}")
 
 
-def validate_dataset_files(root: Path, expected_files: Sequence[str]) -> tuple[Path, ...]:
+def validate_dataset_files(
+    root: Path, expected_files: Sequence[str]
+) -> tuple[Path, ...]:
     """Validate and resolve required files in an extracted dataset.
 
     Args:
@@ -193,7 +195,15 @@ class HuggingFaceDownloader:
         if self.local_dir is not None:
             kwargs["local_dir"] = self.local_dir
         archive_path = Path(hf_hub_download(**kwargs)).expanduser().resolve()
-        destination = target_dir or self.local_dir or (
-            self.cache_dir / self.repo_id.replace("/", "--") / Path(self.filename).stem
+        destination = (
+            target_dir
+            or self.local_dir
+            or (
+                self.cache_dir
+                / self.repo_id.replace("/", "--")
+                / Path(self.filename).stem
+            )
         )
-        return extract_zip(archive_path, Path(destination), expected_files=expected_files)
+        return extract_zip(
+            archive_path, Path(destination), expected_files=expected_files
+        )

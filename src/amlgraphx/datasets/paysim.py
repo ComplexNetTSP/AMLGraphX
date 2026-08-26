@@ -5,6 +5,8 @@ from pathlib import Path
 
 import polars as pl
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -98,11 +100,19 @@ class PaySim(Dataset):
             source_column="nameOrig",
             target_column="nameDest",
         )
-        return frame.with_columns(
+        frame = frame.with_columns(
             (
                 pl.lit(datetime(1970, 1, 1, tzinfo=UTC))
                 + pl.duration(hours=pl.col("step").cast(pl.Int64))
             ).alias("timestamp")
+        )
+        return normalize_transactions(
+            frame,
+            source_column="nameOrig",
+            target_column="nameDest",
+            timestamp_column="timestamp",
+            amount_column="amount",
+            label_column="isFraud",
         )
 
     def _dataset_root(self) -> Path:

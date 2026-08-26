@@ -120,7 +120,9 @@ def clean_lazy_frame(
         if column in timestamps and dtype == pl.String:
             continue
         if dtype.is_numeric():
-            expressions.append(pl.col(column).fill_null(pl.col(column).median()).alias(column))
+            expressions.append(
+                pl.col(column).fill_null(pl.col(column).median()).alias(column)
+            )
         elif dtype == pl.String:
             value = pl.col(column)
             expressions.append(

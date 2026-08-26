@@ -1,5 +1,7 @@
 """Dataset interfaces, adapters, and loading entry points for AMLGraphX."""
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -40,5 +42,6 @@ __all__ = [
     "find_dataset_file",
     "find_tabular_file",
     "load_dataset",
+    "normalize_transactions",
     "validate_dataset_files",
 ]

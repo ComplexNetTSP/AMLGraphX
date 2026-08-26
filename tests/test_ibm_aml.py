@@ -122,13 +122,27 @@ def test_load_dataset_extracts_and_returns_lazy_frames(
     result = transactions.collect()
     assert result.height == 1
     assert "Timestamp__raw" in result.columns
+    assert result.select(
+        ["transaction_id", "source", "target", "timestamp", "amount", "label"]
+    ).to_dicts() == [
+        {
+            "transaction_id": "tx_0",
+            "source": "source-a",
+            "target": "target-a",
+            "timestamp": result["timestamp"][0],
+            "amount": 10.0,
+            "label": 0,
+        }
+    ]
     assert result["Account"][0] == "source-a"
     assert len(calls) == 1
     assert dataset.accounts().collect().height == 1
     assert dataset.patterns().collect().height == 1
 
 
-def test_existing_cache_skips_download(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+def test_existing_cache_skips_download(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     """A complete extracted cache is reused by a new adapter instance."""
     archive = _zip_file(
         tmp_path,

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import polars as pl
 
+from amlgraphx.data.schema import normalize_transactions
+
 from .base import (
     Dataset,
     DatasetMetadata,
@@ -79,9 +81,7 @@ class SAML(Dataset):
 
     def transaction_path(self) -> Path:
         """Return the discovered SAML-D transaction or edge file."""
-        return find_tabular_file(
-            self.download(), ("transaction", "edge", "transfer")
-        )
+        return find_tabular_file(self.download(), ("transaction", "edge", "transfer"))
 
     def transactions(self) -> pl.LazyFrame:
         """Return lazily scanned and dynamically cleaned SAML-D data."""
@@ -91,7 +91,7 @@ class SAML(Dataset):
             if path.suffix.lower() == ".parquet"
             else pl.scan_csv(path)
         )
-        return clean_lazy_frame(frame)
+        return normalize_transactions(clean_lazy_frame(frame))
 
     def _dataset_root(self) -> Path:
         if self.local_dir is not None:
