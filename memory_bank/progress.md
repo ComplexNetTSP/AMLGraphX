@@ -180,3 +180,30 @@ patterns = dataset.patterns()
   `collect_schema` 和 `LazyFrame.collect()`，并加入小例子。
 - 未改变运行逻辑；验证结果为 `42 passed`，相关 Ruff 检查和
   `git diff --check` 通过。
+
+## Native tabular graph features
+
+位置：`src/amlgraphx/tabular/`、`rust/tabular/`
+
+- 新增 `amlgraphx.tabular.GraphFeaturePreprocessor`，提供 SnapML 风格的
+  `fit`、`partial_fit`、`transform`、`fit_transform`、`get_params` 和
+  `set_params` 接口；输入为
+  `[edge_id, source_id, target_id, timestamp, ...numeric_features]`。
+- 图状态是带时间窗和最大边数淘汰策略的有向多重图；重复的 active edge ID
+  与 SnapML 一样会被忽略，时间窗下界使用排他语义。
+- 支持 fan in/out、degree in/out、scatter-gather、temporal cycle、长度受限
+  simple cycle，以及四个端点/方向的 account statistics。Python 层额外提供
+  `transform_causal()`：逐行处理已排序事件，避免普通批处理内的未来可见性。
+- Rust 后端使用每个实例私有的有界 Rayon 线程池：图插入/淘汰串行，特征行在
+  不可变图状态上并行计算；没有全局 worker pool、mutex 或共享可变输出缓冲。
+  这保持结果顺序和确定性，并避免锁顺序、死锁和跨实例状态污染。
+- 小型确定性 fixture 与随机简单多重图无关的 batch 对齐 SnapML 1.17.2；覆盖
+  空 batch schema、时间淘汰、重复 edge ID、严格因果模式、串行/并行一致性和
+  两个 Python 线程并发的独立实例。
+- Rust `cargo test` 为 5 passed，Python 全套测试为 50 passed；Ruff、Rust fmt
+  和 Clippy（warnings-as-errors）均通过。
+- 用论文的配置（128 行 batch、scatter-gather 为 6 小时、其余模式为 1 天、
+  vertex stats 使用 timestamp 与 amount）对真实 PaySim、IBM HI-Small、
+  IBM LI-Small 各执行 512 条、4 个 batch 的 smoke test，三者均返回
+  `(512, 182)` 且所有数值有限。真实 ZIP、解压数据和缓存均在 `/tmp` 临时目录
+  中使用后删除。

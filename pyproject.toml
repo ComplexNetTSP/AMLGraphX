@@ -26,6 +26,7 @@ build-backend = "maturin"
 bindings = "pyo3"
 module-name = "amlgraphx._native._core"
 python-source = "src"
+manifest-path = "rust/Cargo.toml"
 
 [dependency-groups]
 dev = [
