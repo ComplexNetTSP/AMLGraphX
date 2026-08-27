@@ -12,6 +12,7 @@ from amlgraphx.data import (
     split_transaction_graph,
 )
 from amlgraphx.graph import build_transaction_graph
+from amlgraphx.split import TemporalSplit, build_temporal_node_masks
 
 
 def _transactions() -> pl.DataFrame:
@@ -54,6 +55,24 @@ def test_temporal_split_removes_cross_partition_edges() -> None:
     assert splits.train.num_edges == 1
     assert splits.validation.num_edges == 1
     assert splits.test.num_edges == 1
+
+
+def test_temporal_node_masks_keep_the_complete_graph() -> None:
+    """Chronological masks preserve nodes and cross-partition graph edges."""
+    graph = build_transaction_graph(_transactions(), delta=timedelta(days=2))
+    original_edges = graph.edges
+
+    masks = build_temporal_node_masks(
+        graph,
+        TemporalSplit(train_end=_date(3), validation_end=_date(5)),
+    )
+
+    assert masks.train_mask.tolist() == [True, True, False, False, False, False]
+    assert masks.validation_mask.tolist() == [False, False, True, True, False, False]
+    assert masks.test_mask.tolist() == [False, False, False, False, True, True]
+    assert masks.num_nodes == graph.num_nodes
+    assert graph.edges.equals(original_edges)
+    assert graph.num_edges == 5
 
 
 def test_sliding_snapshots_use_local_sparse_edge_indices() -> None:

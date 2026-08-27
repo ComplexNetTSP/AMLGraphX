@@ -42,13 +42,16 @@ Observed smoke-run sizes / 实际 smoke run 尺寸：
     ``delta=1 hour`` 的交易图构建。这些数字用于说明当前数据流，不是代码限制。
 """
 
-from bisect import bisect_right
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 
+import numpy as np
 import polars as pl
+from numpy.typing import NDArray
+
+from amlgraphx._native._core import temporal_edge_indices as _temporal_edge_indices
 
 type TransactionTable = pl.DataFrame | pl.LazyFrame
 
@@ -434,47 +437,28 @@ class TransactionGraph:
         # ``with_columns`` adds the numeric timestamp used for sorting; the
         # original row index breaks ties deterministically.
         # ``with_columns`` 增加用于排序的数值时间戳；原始行号用于稳定处理同一时间。
-        rows = list(ordered.iter_rows(named=True))
         delta_ns = _timedelta_to_nanoseconds(delta)
 
-        # Build an account -> sorted outgoing transactions index. This turns
-        # each later lookup into a binary search instead of a full scan.
-        # 建立“账户 -> 已按时间排序的发出交易”索引，后续用二分查找而不是全表扫描。
-        outgoing: dict[str, list[tuple[int, int]]] = {}
-        outgoing_times: dict[str, list[int]] = {}
-        for position, row in enumerate(rows):
-            account = row[source]
-            timestamp = row[_TIMESTAMP_NS]
-            outgoing.setdefault(account, []).append((timestamp, position))
-            outgoing_times.setdefault(account, []).append(timestamp)
-
-        edge_records: list[dict[str, object]] = []
-        for row in rows:
-            candidates = outgoing.get(row[target], [])
-            candidate_times = outgoing_times.get(row[target], [])
-            timestamp = row[_TIMESTAMP_NS]
-            # ``bisect_right`` starts strictly after the current timestamp, so
-            # same-time rows are intentionally excluded. The second search is
-            # inclusive of ``timestamp + delta_ns``.
-            # ``bisect_right`` 从当前时间之后开始，因此同一时间的交易被排除；
-            # 第二次查找包含 ``timestamp + delta_ns`` 这一边界。
-            start = bisect_right(candidate_times, timestamp)
-            end = bisect_right(
-                candidate_times,
-                timestamp + delta_ns,
-            )
-            for _, successor_position in candidates[start:end]:
-                successor = rows[successor_position]
-                edge_records.append(
-                    {
-                        "source_transaction_id": row["transaction_id"],
-                        "target_transaction_id": successor["transaction_id"],
-                        "via_account": row[target],
-                        "time_delta_ns": successor[_TIMESTAMP_NS] - timestamp,
-                    }
-                )
-
-        edges = _transaction_edge_frame(edge_records)
+        # One local categorical namespace gives both endpoint columns matching
+        # compact u32 codes without Python strings crossing the native boundary.
+        categories = pl.Categories.random(namespace="amlgraphx-transaction-graph")
+        account_dtype = pl.Categorical(categories)
+        coded = ordered.select(
+            pl.col(source).cast(account_dtype).to_physical().alias("source_code"),
+            pl.col(target).cast(account_dtype).to_physical().alias("target_code"),
+        )
+        source_positions, target_positions, time_deltas = _temporal_edge_indices(
+            coded["source_code"].to_numpy(),
+            coded["target_code"].to_numpy(),
+            ordered[_TIMESTAMP_NS].to_numpy(),
+            delta_ns,
+        )
+        edges = _transaction_edge_frame(
+            ordered,
+            source_positions,
+            target_positions,
+            time_deltas,
+        )
         return cls(nodes=nodes, edges=edges)
 
 
@@ -985,7 +969,12 @@ def _parse_datetime_strings(expression: pl.Expr) -> pl.Expr:
     )
 
 
-def _transaction_edge_frame(records: list[dict[str, object]]) -> pl.DataFrame:
+def _transaction_edge_frame(
+    ordered: pl.DataFrame,
+    source_positions: NDArray[np.int64],
+    target_positions: NDArray[np.int64],
+    time_deltas_ns: NDArray[np.int64],
+) -> pl.DataFrame:
     """Create the stable edge schema, including the empty-graph case.
 
     Polars / Polars：``pl.duration(nanoseconds=...)`` converts the integer time
@@ -994,29 +983,21 @@ def _transaction_edge_frame(records: list[dict[str, object]]) -> pl.DataFrame:
     dtypes.
 
     Returns / 返回：
-        A Polars ``DataFrame`` with shape ``(len(records), 4)`` and columns
+        A Polars ``DataFrame`` with shape ``(E, 4)`` and columns
         ``source_transaction_id`` (String), ``target_transaction_id`` (String),
         ``via_account`` (String), and ``time_delta`` (Duration[ns]). Empty
         input still returns shape ``(0, 4)`` with the same schema.
 
-        返回 shape 为 ``(len(records), 4)`` 的 Polars ``DataFrame``，列为
+        返回 shape 为 ``(E, 4)`` 的 Polars ``DataFrame``，列为
         ``source_transaction_id``、``target_transaction_id``、``via_account``
         （均为 String）和 ``time_delta``（Duration[ns]）。输入为空时仍返回
         shape ``(0, 4)`` 的相同 schema。
     """
-    if records:
-        return (
-            pl.DataFrame(records)
-            .with_columns(
-                pl.duration(nanoseconds=pl.col("time_delta_ns")).alias("time_delta")
-            )
-            .drop("time_delta_ns")
-        )
     return pl.DataFrame(
         {
-            "source_transaction_id": pl.Series([], dtype=pl.String),
-            "target_transaction_id": pl.Series([], dtype=pl.String),
-            "via_account": pl.Series([], dtype=pl.String),
-            "time_delta": pl.Series([], dtype=pl.Duration("ns")),
+            "source_transaction_id": ordered["transaction_id"].gather(source_positions),
+            "target_transaction_id": ordered["transaction_id"].gather(target_positions),
+            "via_account": ordered["target"].gather(source_positions),
+            "time_delta": pl.Series(time_deltas_ns, dtype=pl.Duration("ns")),
         }
     )

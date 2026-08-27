@@ -1,11 +1,16 @@
 """AMLGraphX public package exports."""
 
-from .graph.graphs import (
+from .graph import (
     AccountGraph,
+    GraphBuildSpec,
+    GraphNodeType,
+    GraphTemporalMode,
     TransactionGraph,
     build_account_graph,
     build_transaction_graph,
+    prepare_graph,
 )
+from .split import TemporalNodeMasks, TemporalSplit, build_temporal_node_masks
 
 
 def hello() -> str:
@@ -15,8 +20,15 @@ def hello() -> str:
 
 __all__ = [
     "AccountGraph",
+    "GraphBuildSpec",
+    "GraphNodeType",
+    "GraphTemporalMode",
+    "TemporalNodeMasks",
+    "TemporalSplit",
     "TransactionGraph",
     "build_account_graph",
+    "build_temporal_node_masks",
     "build_transaction_graph",
     "hello",
+    "prepare_graph",
 ]

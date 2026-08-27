@@ -227,3 +227,76 @@ patterns = dataset.patterns()
   1.0100 s（3.98x）；每实例 Rayon pool 的 OS 线程数同时增加，验证 native 多线程
   实际生效。最终验证：Rust `cargo test` 5 passed、Clippy `-D warnings` 通过、
   Python 全套 53 passed、Ruff check 通过、`git diff --check` 通过。
+
+## Full graph chronological node masks
+
+位置：`src/amlgraphx/split/temporal.py`、
+`examples/paysim_transaction_graph.py`
+
+- 新增 `TemporalNodeMasks` 和 `build_temporal_node_masks()`，在一张完整的
+  `TransactionGraph` 上按半开时间区间生成 PyTorch boolean masks，不删除节点或边。
+- 保留原有 `TemporalSplit`、`apply_temporal_split()` 和
+  `split_transaction_graph()` 的独立诱导子图行为，避免改变已有协议和兼容性。
+- example 已从 PaySim 改为 IBM HI-Small，并展示完整图、chronological masks 和
+  snapshot；支持传入临时 `cache_dir` 以便可重复验证和清理数据。
+- 真实数据验证：IBM HI-Small 为 `5,078,345 / 7,853,196`、IBM LI-Small 为
+  `6,924,049 / 14,149,999`（节点/边，`edge_delta=4 hours`）；两个数据集的 mask
+  均覆盖全部节点且互不重叠，临时下载目录均已删除。
+- 更新后的 HI-Small example 使用临时缓存真实运行成功，数据已删除。
+- 最终 Python 验证：`54 passed`；Ruff check、format check 和 `compileall` 均通过。
+
+## Native parallel transaction graph construction
+
+位置：`rust/graph/temporal_edges.rs`、`rust/graph/mod.rs`、
+`src/amlgraphx/graph/graphs.py`
+
+- `TransactionGraph.from_transactions()` 保持公共 API 和 Polars schema 不变，
+  但 temporal successor matching 与 edge position emission 已改为始终调用私有
+  Rust kernel；没有 Python fallback、backend selector 或逐行 PyO3 调用。
+- Python/Polars 继续负责字段解析、清洗、时间排序和共享 categorical account code；
+  Rust 一次接收 contiguous `u32/u32/i64` 数组，并返回三条 contiguous `i64`
+  edge arrays。时间语义保持 `(current_time, current_time + delta]`，同时间交易不连边，
+  上界包含，输出顺序确定。
+- kernel 使用进程级有界 Rayon pool；输入在释放 GIL 前复制，worker 只读共享索引并写入
+  自己的 chunk-local vectors，最后按 chunk 顺序合并。小于 4,096 行时走串行 kernel，
+  避免并行调度成本；没有 Mutex、RwLock、channel、atomic、unsafe 或手动线程生命周期。
+- 修复测试发现的极大 `delta` 中间加法溢出：使用 `i128::saturating_add` 并截断到
+  `i64::MAX`，避免 worker panic；PyO3 边界仍使用 `catch_unwind` 将意外 panic 转成
+  `RuntimeError`。
+- release benchmark：100 万节点/999,999 边 native kernel，4 workers 中位数
+  `0.069249 s`，1 worker `0.163123 s`（约 2.36x）；20 万节点/399,898 边完整
+  graph API 为 `0.223968 s`，等价 Python reference 为 `0.975437 s`（4.36x）。
+- 全量真实验证（`delta=4h`）：IBM HI-Small 为
+  `5,078,345 / 7,853,196`（节点/边，11.109 s），IBM LI-Small 为
+  `6,924,049 / 14,149,999`（16.004 s）。两次下载均使用独立 `/tmp`
+  `TemporaryDirectory`，退出后断言目录已删除。
+- 新增 Rust temporal boundary、overflow、validation、determinism 测试，以及 Python
+  native/reference 等价、空 edge schema、错误映射和 4 个 concurrent callers 测试。
+  最终验证：Rust 9 tests passed，Clippy `-D warnings` 通过，Python 58 tests passed，
+  Ruff lint、相关 format check 和 compileall 通过。
+
+## IBM graph thread-scaling experiment
+
+实验条件：64 logical CPUs、约 753 GiB available memory；四个变体各下载一次，
+随后每个线程数在独立 Python 进程中重新扫描同一份数据。`delta=4h`、
+`POLARS_MAX_THREADS=64` 固定，`OMP_NUM_THREADS=MKL_NUM_THREADS=1`，只改变
+Rust Rayon 的 `RAYON_NUM_THREADS`（1、2、4、8、16、32、64）。每个条件执行一次
+完整 `build_transaction_graph()`，所以结果适合扩展性判断，不应当解释为严格统计中位数。
+
+| variant | 1 thread | 2 | 4 | 8 | 16 | 32 | 64 | best speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| HI-Small (7,853,196 edges) | 12.450s | 12.102s | 11.661s | 11.284s | 11.253s | 11.074s | 11.156s | 1.12x @32 |
+| LI-Small (14,149,999 edges) | 17.717s | 16.756s | 16.509s | 16.726s | 16.435s | 15.648s | 15.843s | 1.13x @32 |
+| HI-Medium (168,731,526 edges) | 104.386s | — | 96.199s | 92.170s | 92.073s | 88.973s | 88.980s | 1.17x @32 |
+| LI-Medium (164,698,987 edges) | 100.411s | — | 87.502s | 88.023s | 89.717s | 89.646s | 86.074s | 1.17x @64 |
+
+- Medium 构图峰值 RSS 约为 26.4–29.5 GiB；64 线程相对 1 线程约增加
+  9–10%，没有出现无界线程或内存失控。所有线程数的节点/边计数完全一致。
+- 端到端最佳线程数没有稳定地随 CPU 数量增加而增加：Small 在 32 附近平台，
+  HI-Medium 在 32 附近平台，LI-Medium 的单次测试 64 最佳。Rust edge kernel
+  的并行收益被 CSV 读取、Polars 清洗、排序、categorical 编码和结果物化部分稀释。
+- 实用默认建议为 `RAYON_NUM_THREADS=32`；如果 LI-Medium 类负载更常见且内存余量
+  足够，可单独测试 64。设置必须发生在 Python 进程启动前，例如
+  `RAYON_NUM_THREADS=32 uv run python examples/paysim_transaction_graph.py`。
+- 四个实验均使用临时目录 `/tmp/amlgraphx-thread-small-*` 或
+  `/tmp/amlgraphx-thread-medium-*`，实验结束后目录已删除。

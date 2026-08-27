@@ -1,9 +1,12 @@
 """Tests for AMLGraphX account and transaction graph views."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
+import numpy as np
 import polars as pl
 import pytest
+from amlgraphx._native._core import temporal_edge_indices
 
 from amlgraphx.datasets import clean_lazy_frame
 from amlgraphx.graph.graphs import (
@@ -315,3 +318,119 @@ def test_transaction_graph_requires_timestamp_and_delta() -> None:
             ),
             delta=timedelta(seconds=-1),
         )
+
+
+def test_transaction_graph_empty_edges_keep_stable_schema() -> None:
+    """The native empty result preserves the documented Polars edge schema."""
+    graph = build_transaction_graph(
+        pl.DataFrame(
+            {
+                "source": ["A"],
+                "target": ["B"],
+                "timestamp": [datetime(2025, 1, 1, tzinfo=UTC)],
+            }
+        ),
+        delta=timedelta(0),
+    )
+
+    assert graph.edges.schema == {
+        "source_transaction_id": pl.String,
+        "target_transaction_id": pl.String,
+        "via_account": pl.String,
+        "time_delta": pl.Duration("ns"),
+    }
+
+
+def test_native_temporal_edges_match_reference_on_deterministic_data() -> None:
+    """The parallel native path exactly matches the temporal graph definition."""
+    rng = np.random.default_rng(7)
+    size = 500
+    accounts = np.array([f"a{index}" for index in range(12)])
+    timestamps = np.sort(rng.integers(0, 2_000, size=size, dtype=np.int64))
+    sources = accounts[rng.integers(0, len(accounts), size=size)]
+    targets = accounts[rng.integers(0, len(accounts), size=size)]
+    frame = pl.DataFrame(
+        {
+            "transaction_id": [f"t{index}" for index in range(size)],
+            "source": sources,
+            "target": targets,
+            "timestamp": timestamps,
+        },
+        schema_overrides={"timestamp": pl.Datetime("ns")},
+    )
+    delta_ns = 1_000
+
+    graph = build_transaction_graph(frame, delta=timedelta(microseconds=1))
+    expected = []
+    for earlier in range(size):
+        for later in range(size):
+            gap = int(timestamps[later] - timestamps[earlier])
+            if targets[earlier] == sources[later] and 0 < gap <= delta_ns:
+                expected.append(
+                    (
+                        f"t{earlier}",
+                        f"t{later}",
+                        targets[earlier],
+                        gap,
+                    )
+                )
+
+    actual = list(
+        zip(
+            graph.edges["source_transaction_id"],
+            graph.edges["target_transaction_id"],
+            graph.edges["via_account"],
+            graph.edges["time_delta"].cast(pl.Int64),
+            strict=True,
+        )
+    )
+    assert actual == expected
+
+
+def test_native_temporal_edge_boundary_rejects_invalid_arrays() -> None:
+    """Malformed internal arrays become Python errors rather than Rust panics."""
+    with pytest.raises(ValueError, match="equal lengths"):
+        temporal_edge_indices(
+            np.array([0], dtype=np.uint32),
+            np.array([], dtype=np.uint32),
+            np.array([0], dtype=np.int64),
+            1,
+        )
+    with pytest.raises(ValueError, match="sorted"):
+        temporal_edge_indices(
+            np.array([0, 1], dtype=np.uint32),
+            np.array([1, 0], dtype=np.uint32),
+            np.array([1, 0], dtype=np.int64),
+            1,
+        )
+    with pytest.raises(ValueError, match="contiguous"):
+        values = np.arange(6, dtype=np.uint32)[::2]
+        temporal_edge_indices(values, values, np.arange(3, dtype=np.int64), 1)
+
+
+def test_concurrent_transaction_graph_builds_are_deterministic() -> None:
+    """Concurrent callers share bounded Rayon workers without state races."""
+    size = 20_000
+    positions = np.arange(size)
+    frame = pl.DataFrame(
+        {
+            "transaction_id": [f"t{position}" for position in positions],
+            "source": [f"a{position % 16}" for position in positions],
+            "target": [f"a{(position + 1) % 16}" for position in positions],
+            "timestamp": positions * 1_000,
+        },
+        schema_overrides={"timestamp": pl.Datetime("ns")},
+    )
+
+    def build_parallel_fixture() -> pl.DataFrame:
+        return build_transaction_graph(
+            frame,
+            delta=timedelta(microseconds=16),
+        ).edges
+
+    expected = build_parallel_fixture()
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(build_parallel_fixture) for _ in range(4)]
+        results = [future.result(timeout=30) for future in futures]
+
+    assert all(result.equals(expected) for result in results)
