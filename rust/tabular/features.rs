@@ -451,20 +451,14 @@ fn append_vertex_statistics(
             ));
         }
     }
+    let cutoff = row[3] - config.vertex_stats_tw;
     for (vertex, outgoing) in [
         (source, true),
         (source, false),
         (target, true),
         (target, false),
     ] {
-        append_one_vertex_statistics(
-            output,
-            state,
-            vertex,
-            outgoing,
-            state.latest_timestamp().unwrap_or(row[3]) - config.vertex_stats_tw,
-            config,
-        );
+        append_one_vertex_statistics(output, state, vertex, outgoing, cutoff, config);
     }
     Ok(())
 }

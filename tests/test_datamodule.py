@@ -143,6 +143,27 @@ def test_evaluation_snapshots_keep_pre_split_context_but_mask_targets() -> None:
     assert snapshot.edge_index.tolist() == [[0, 1, 2], [1, 2, 3]]
 
 
+def test_training_snapshots_keep_lookback_context_but_mask_targets() -> None:
+    """Later training windows use the same causal graph context as evaluation."""
+    data_module = TransactionGraphDataModule(
+        _transactions(),
+        edge_delta=timedelta(days=2),
+        train_end=_date(6),
+        validation_end=_date(7),
+        test_end=_date(8),
+        window_size=timedelta(days=2),
+        stride=timedelta(days=1),
+    )
+    data_module.setup()
+
+    snapshot = list(data_module.train_snapshots())[1]
+
+    assert snapshot.graph.nodes["transaction_id"].to_list() == ["t1", "t2", "t3"]
+    assert snapshot.target_mask is not None
+    assert snapshot.target_mask.tolist() == [False, True, True]
+    assert snapshot.edge_index.tolist() == [[0, 1], [1, 2]]
+
+
 def test_data_module_rejects_invalid_time_configuration() -> None:
     """Unordered cutoffs and non-positive windows fail clearly."""
     with pytest.raises(ValueError, match="train_end"):

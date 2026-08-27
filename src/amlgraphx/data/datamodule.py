@@ -495,8 +495,9 @@ class TransactionGraphDataModule:
 
         Returns / 返回：
             ``Iterator[GraphSnapshot]``. The iterator yields only non-empty
-            windows fully inside ``[-inf, train_end)``; each tensor has shape
-            ``(2, E_window)``.
+            target windows inside ``[-inf, train_end)``. Each snapshot retains
+            ``edge_delta`` history and marks training targets with
+            ``target_mask``.
 
             返回 ``Iterator[GraphSnapshot]``，只 yield 完全位于
             ``[-inf, train_end)`` 且非空的窗口；每个 tensor 的 shape 是
@@ -508,6 +509,7 @@ class TransactionGraphDataModule:
             stride=self.stride,
             end_time=self.train_end,
             drop_last=self.drop_last,
+            context_size=self.edge_delta,
         )
 
     def validation_snapshots(self) -> Iterator[GraphSnapshot]:

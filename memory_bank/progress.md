@@ -339,6 +339,6 @@ Rust Rayon 的 `RAYON_NUM_THREADS`（1、2、4、8、16、32、64）。每个条
   当前保留历史，避免从未来 state 读取特征。
 - 交易图 native kernel 会拒绝无法由 `int64` 纳秒表达的 `time_delta`，而不发生
   overflow/wrap。
-- `TransactionGraphDataModule` 的 validation/test snapshot 会从完整图保留
-  `edge_delta` lookback，并通过局部 `target_mask` 区分历史 context 与评估目标；
+- `TransactionGraphDataModule` 的 train/validation/test snapshot 都会保留
+  `edge_delta` lookback，并通过局部 `target_mask` 区分历史 context 与预测目标；
   原有 `split_transaction_graph()` 仍保留严格诱导子图协议。

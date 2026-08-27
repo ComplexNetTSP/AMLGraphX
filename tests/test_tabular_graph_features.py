@@ -207,6 +207,7 @@ def test_vertex_statistics_respect_their_own_time_window() -> None:
             vertex_stats_cols=[],
             vertex_stats_feats=[1],
             vertex_stats_tw=10,
+            time_window=-1,
             fan=True,
             fan_tw=100,
             fan_bins=[2],
@@ -219,7 +220,8 @@ def test_vertex_statistics_respect_their_own_time_window() -> None:
         np.array([[1, 1, 2, 0], [2, 1, 3, 50]], dtype=float)
     )
 
-    assert output[0, -4] == 1
+    assert output[0, -4] == 2
+    assert output[1, -4] == 1
 
 
 def test_duplicate_vertex_statistic_features_are_rejected() -> None:
