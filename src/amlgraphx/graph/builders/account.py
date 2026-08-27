@@ -9,6 +9,14 @@ home for the account builder during the staged migration.
     本模块是迁移期间账户为节点 builder 的规范语义入口。
 """
 
-from ..graphs import AccountGraph, build_account_graph
+from ..graphs import (
+    AccountGraph,
+    build_account_graph,
+    build_time_aware_account_graph,
+)
 
-__all__ = ["AccountGraph", "build_account_graph"]
+__all__ = [
+    "AccountGraph",
+    "build_account_graph",
+    "build_time_aware_account_graph",
+]

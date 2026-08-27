@@ -231,39 +231,13 @@ class AccountGraph:
             target_column=target_column,
             transaction_id_column=transaction_id_column,
         )
-
-        # ``select`` keeps the original transaction attributes. The internal
-        # row index is only for deterministic ID generation, so it is removed.
-        # ``select`` 保留原始交易属性；内部行号只用于生成 ID，因此要删除。
-        edge_columns = [column for column in frame.columns if column != _ROW_INDEX]
-        edges = frame.select(edge_columns)
-
-        # ``pl.concat`` vertically stacks two one-column tables. ``unique``
-        # keeps one row per account, and ``sort`` makes node order stable.
-        # ``pl.concat`` 纵向堆叠两张单列表；``unique`` 按账户去重，``sort``
-        # 让节点顺序稳定，便于后续把节点映射为整数索引。
-        nodes = (
-            pl.concat(
-                [
-                    frame.select(pl.col(source).alias("node_id")),
-                    frame.select(pl.col(target).alias("node_id")),
-                ]
-            )
-            .unique(subset=["node_id"], maintain_order=True)
-            .sort("node_id")
+        return _account_graph_from_prepared(
+            frame,
+            source=source,
+            target=target,
+            account_metadata=account_metadata,
+            account_id_column=account_id_column,
         )
-
-        if account_metadata is not None:
-            # A left join preserves every account observed in transactions,
-            # even when metadata is missing. / 左连接保留所有交易中出现的账户，
-            # 即使某个账户没有对应的元数据也不会丢失。
-            nodes = _join_account_metadata(
-                nodes,
-                account_metadata,
-                account_id_column=account_id_column,
-            )
-
-        return cls(nodes=nodes, edges=edges)
 
 
 @dataclass(frozen=True, slots=True)
@@ -515,6 +489,60 @@ def build_account_graph(
     )
 
 
+def build_time_aware_account_graph(
+    transactions: TransactionTable,
+    *,
+    account_metadata: TransactionTable | None = None,
+    source_column: str | None = None,
+    target_column: str | None = None,
+    timestamp_column: str | None = None,
+    transaction_id_column: str | None = None,
+    account_id_column: str | None = None,
+) -> AccountGraph:
+    """Build an account graph whose transaction edges have canonical time.
+
+    Each valid transaction remains one directed multigraph edge together with
+    all input columns, including amount, label, and dataset-specific features.
+    The selected timestamp is parsed into the canonical ``timestamp`` column;
+    rows with unparseable timestamps are excluded because they cannot belong
+    to a temporal graph or event stream.
+
+    中文：每笔有效交易仍是一条独立有向边，并保留金额、标签和数据集特有字段。
+    时间字段会解析为统一的 ``timestamp``；无法解析时间的交易不能参与时间图，
+    因此会被删除。
+
+    Args:
+        transactions: Transaction rows as a Polars DataFrame or LazyFrame.
+        account_metadata: Optional attributes joined to account nodes.
+        source_column: Optional sender column override.
+        target_column: Optional receiver column override.
+        timestamp_column: Optional transaction timestamp override.
+        transaction_id_column: Optional transaction ID override.
+        account_id_column: Optional account metadata ID override.
+
+    Returns:
+        An ``AccountGraph`` with typed ``timestamp`` and full edge features.
+    """
+    frame, source, target = _prepare_transactions(
+        transactions,
+        source_column=source_column,
+        target_column=target_column,
+        timestamp_column=timestamp_column,
+        transaction_id_column=transaction_id_column,
+        parse_timestamp=True,
+    )
+    if frame.height and frame["timestamp"].null_count() == frame.height:
+        raise ValueError("Timestamp column contains no parseable timestamps")
+    frame = frame.filter(pl.col("timestamp").is_not_null())
+    return _account_graph_from_prepared(
+        frame,
+        source=source,
+        target=target,
+        account_metadata=account_metadata,
+        account_id_column=account_id_column,
+    )
+
+
 def build_transaction_graph(
     transactions: TransactionTable,
     *,
@@ -566,6 +594,39 @@ def build_transaction_graph(
         timestamp_column=timestamp_column,
         transaction_id_column=transaction_id_column,
     )
+
+
+def _account_graph_from_prepared(
+    frame: pl.DataFrame,
+    *,
+    source: str,
+    target: str,
+    account_metadata: TransactionTable | None,
+    account_id_column: str | None,
+) -> AccountGraph:
+    """Materialize account nodes and transaction edges from prepared rows."""
+    # Keep every transaction column as an edge attribute. Only the temporary
+    # row index is implementation detail. / 每个交易字段都是潜在 edge feature；
+    # 只有内部行号不属于公开输出。
+    edge_columns = [column for column in frame.columns if column != _ROW_INDEX]
+    edges = frame.select(edge_columns)
+    nodes = (
+        pl.concat(
+            [
+                frame.select(pl.col(source).alias("node_id")),
+                frame.select(pl.col(target).alias("node_id")),
+            ]
+        )
+        .unique(subset=["node_id"], maintain_order=True)
+        .sort("node_id")
+    )
+    if account_metadata is not None:
+        nodes = _join_account_metadata(
+            nodes,
+            account_metadata,
+            account_id_column=account_id_column,
+        )
+    return AccountGraph(nodes=nodes, edges=edges)
 
 
 def _prepare_transactions(

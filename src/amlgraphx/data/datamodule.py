@@ -60,7 +60,11 @@ import polars as pl
 import torch
 from torch import Tensor
 
-from amlgraphx.graph import TransactionGraph, build_transaction_graph
+from amlgraphx.graph.graphs import (
+    AccountGraph,
+    TransactionGraph,
+    build_transaction_graph,
+)
 
 type TransactionTable = pl.DataFrame | pl.LazyFrame
 
@@ -113,26 +117,26 @@ class TransactionGraphSplit:
 
 @dataclass(frozen=True, slots=True)
 class GraphSnapshot:
-    """Represent one temporal transaction-graph window with sparse edges.
+    """Represent one temporal graph window with sparse local edges.
 
-    English: ``graph.nodes`` stores the transaction attributes and
-    ``edge_index`` stores local integer endpoints for PyTorch/PyG-style
-    message passing. The node IDs in the Polars table remain the stable
-    transaction IDs; the tensor uses row positions only inside this snapshot.
+    English: ``graph.nodes`` and ``graph.edges`` preserve the Polars attributes
+    of either account-node or transaction-node graphs. ``edge_index`` stores
+    local integer endpoints for PyTorch/PyG-style message passing. Stable IDs
+    remain in the tables; the tensor uses positions only inside this snapshot.
 
-    中文：``graph.nodes`` 保存交易属性，``edge_index`` 保存适合
-    PyTorch/PyG message passing 的局部整数端点。Polars 表中仍保留稳定的交易
-    ID；tensor 只在当前 snapshot 内使用行号。
+    中文：``graph.nodes`` 和 ``graph.edges`` 保留账户图或交易图的 Polars
+    属性，``edge_index`` 保存适合 PyTorch/PyG message passing 的局部整数端点。
+    稳定 ID 保留在表中，tensor 只在当前 snapshot 内使用行位置。
 
     Output shape / 输出尺寸：
-        ``graph.nodes`` has shape ``(N_snapshot, C)`` and
-        ``graph.edges`` has shape ``(E_snapshot, 4)``. ``edge_index`` is a
+        ``graph.nodes`` has shape ``(N_snapshot, C_node)`` and
+        ``graph.edges`` has shape ``(E_snapshot, C_edge)``. ``edge_index`` is a
         contiguous ``torch.long`` tensor with shape ``(2, E_snapshot)``; its
         values are in ``[0, N_snapshot)``. An empty snapshot graph uses shape
         ``(2, 0)``.
 
-        ``graph.nodes`` 的 shape 是 ``(N_snapshot, C)``，``graph.edges`` 的
-        shape 是 ``(E_snapshot, 4)``。``edge_index`` 是连续的 ``torch.long``
+        ``graph.nodes`` 的 shape 是 ``(N_snapshot, C_node)``，``graph.edges``
+        的 shape 是 ``(E_snapshot, C_edge)``。``edge_index`` 是连续的 ``torch.long``
         tensor，shape 为 ``(2, E_snapshot)``，其中的值位于
         ``[0, N_snapshot)``；空边图使用 ``(2, 0)``。
 
@@ -147,14 +151,14 @@ class GraphSnapshot:
     No dense adjacency matrix is materialized.
 
     Args:
-        graph: Induced transaction graph for the window.
+        graph: Account or transaction graph selected for the window.
         edge_index: Sparse COO-style source and target node indices.
         start_time: Inclusive beginning of the window.
         end_time: Exclusive end of the window.
         index: One-based snapshot number within its partition.
     """
 
-    graph: TransactionGraph
+    graph: AccountGraph | TransactionGraph
     edge_index: Tensor
     start_time: datetime
     end_time: datetime
@@ -162,7 +166,7 @@ class GraphSnapshot:
 
     @property
     def num_nodes(self) -> int:
-        """Return snapshot node count / 返回 snapshot 中的交易节点数。"""
+        """Return snapshot node count / 返回 snapshot 中的节点数。"""
         return self.graph.num_nodes
 
     @property

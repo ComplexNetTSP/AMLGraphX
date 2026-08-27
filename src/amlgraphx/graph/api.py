@@ -25,14 +25,20 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
-from .builders.account import AccountGraph, build_account_graph
+from .builders.account import (
+    AccountGraph,
+    build_time_aware_account_graph,
+)
 from .builders.transaction import TransactionGraph, build_transaction_graph
+from .temporal.event_stream import AccountEventStream
 
 if TYPE_CHECKING:
     from .temporal.snapshot import GraphSnapshot
 
 type TransactionTable = pl.DataFrame | pl.LazyFrame
-type GraphBuildResult = AccountGraph | TransactionGraph | Iterator["GraphSnapshot"]
+type GraphBuildResult = (
+    AccountGraph | TransactionGraph | AccountEventStream | Iterator["GraphSnapshot"]
+)
 
 
 class GraphNodeType(StrEnum):
@@ -47,6 +53,7 @@ class GraphTemporalMode(StrEnum):
 
     STATIC = "static"
     SNAPSHOT = "snapshot"
+    EVENT_STREAM = "event_stream"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,10 +70,9 @@ class GraphBuildSpec:
         时间感知图还是 snapshot 序列。``edge_delta`` 只控制交易流边，
         ``bin_size`` 与 ``stride`` 只控制 snapshot，三者不能混用。
 
-    Account snapshots are reserved for a future implementation. Keeping that
-    combination explicit prevents silently returning a transaction snapshot.
-    / 账户 snapshot 暂未实现；显式保留这个组合可以避免错误地返回交易
-    snapshot。
+    Account graphs support all three modes. Transaction graphs support static
+    and snapshot modes; a transaction-node event stream would require separate
+    node-arrival semantics and is therefore rejected explicitly.
     """
 
     node_type: GraphNodeType | str
@@ -87,10 +93,22 @@ class GraphBuildSpec:
             self.bin_size is not None or self.stride is not None
         ):
             raise ValueError("bin_size and stride require temporal='snapshot'")
+        if self.temporal is GraphTemporalMode.EVENT_STREAM and (
+            self.bin_size is not None or self.stride is not None
+        ):
+            raise ValueError("bin_size and stride require temporal='snapshot'")
         if self.temporal is GraphTemporalMode.SNAPSHOT and (
             self.bin_size is None or self.stride is None
         ):
             raise ValueError("snapshot preparation requires both bin_size and stride")
+        if (
+            self.node_type is GraphNodeType.TRANSACTION
+            and self.temporal is GraphTemporalMode.EVENT_STREAM
+        ):
+            raise NotImplementedError(
+                "transaction-as-node event streams require explicit node-arrival "
+                "semantics and are not supported"
+            )
         if self.node_type is GraphNodeType.TRANSACTION and self.edge_delta is None:
             raise ValueError("transaction graphs require edge_delta")
 
@@ -107,6 +125,7 @@ def prepare_graph(
     end_time: datetime | None = None,
     drop_last: bool = True,
     account_metadata: TransactionTable | None = None,
+    timestamp_column: str | None = None,
 ) -> GraphBuildResult:
     """Prepare a graph using explicit node and temporal semantics.
 
@@ -124,8 +143,12 @@ def prepare_graph(
     / 本函数只是薄分发层，不负责数据集读取、train/validation/test 切分或后端
     转换。
 
+    Account static and snapshot outputs preserve one edge row per transaction,
+    including amount and all dataset-specific edge features. Account event
+    streams preserve the same rows as time-ordered events.
+
     Raises:
-        NotImplementedError: If account-as-node snapshots are requested.
+        NotImplementedError: If transaction-as-node event stream is requested.
         ValueError: If the requested combination is incomplete or invalid.
     """
     spec = GraphBuildSpec(
@@ -140,16 +163,32 @@ def prepare_graph(
     )
 
     if spec.node_type is GraphNodeType.ACCOUNT:
-        if spec.temporal is GraphTemporalMode.SNAPSHOT:
-            raise NotImplementedError(
-                "account-as-node snapshot preparation is not implemented yet"
-            )
-        return build_account_graph(
+        graph = build_time_aware_account_graph(
             transactions,
             account_metadata=account_metadata,
+            timestamp_column=timestamp_column,
+        )
+        if spec.temporal is GraphTemporalMode.STATIC:
+            return graph
+        if spec.temporal is GraphTemporalMode.EVENT_STREAM:
+            return AccountEventStream.from_graph(graph)
+
+        from .temporal.snapshot import build_account_snapshots
+
+        return build_account_snapshots(
+            graph,
+            bin_size=spec.bin_size,  # type: ignore[arg-type]
+            stride=spec.stride,  # type: ignore[arg-type]
+            start_time=spec.start_time,
+            end_time=spec.end_time,
+            drop_last=spec.drop_last,
         )
 
-    graph = build_transaction_graph(transactions, delta=spec.edge_delta)  # type: ignore[arg-type]
+    graph = build_transaction_graph(
+        transactions,
+        delta=spec.edge_delta,  # type: ignore[arg-type]
+        timestamp_column=timestamp_column,
+    )
     if spec.temporal is GraphTemporalMode.STATIC:
         return graph
 

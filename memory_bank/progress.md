@@ -1,15 +1,13 @@
 # AMLGraphX 当前进度
 
-更新时间：2026-08-25
+更新时间：2026-08-28
 
 ## Git 状态
 
-- 当前分支：`feature/datasets`
-- 当前提交：`5d2266e Fix dataset graph compatibility`
-- 远端：`origin/feature/datasets` 已同步
-- 已跟踪文件：无未提交修改
-- 本地未跟踪支持文件：`.codegraph/`、`AGENTS.md`、`memory_bank/`
-- 本阶段没有向 `main` 推送
+- 当前开发分支：`feature/tabular`
+- 远端同步目标：`origin/feature/tabular`
+- 精确提交与工作区状态以 `git log -1`、`git status` 为准，避免本文件记录过期 hash。
+- 本阶段不直接向 `main` 推送。
 
 ## 已完成的功能
 
@@ -300,3 +298,34 @@ Rust Rayon 的 `RAYON_NUM_THREADS`（1、2、4、8、16、32、64）。每个条
   `RAYON_NUM_THREADS=32 uv run python examples/paysim_transaction_graph.py`。
 - 四个实验均使用临时目录 `/tmp/amlgraphx-thread-small-*` 或
   `/tmp/amlgraphx-thread-medium-*`，实验结束后目录已删除。
+
+## Account temporal representations and PyG interoperability
+
+位置：`src/amlgraphx/graph/temporal/`、`src/amlgraphx/graph/pyg.py`、
+`examples/account_graph_representations.py`
+
+- `prepare_graph()` 现在完整支持 account-as-node 的 time-aware static、snapshot
+  和 event stream。static/snapshot 每笔交易仍是一条独立有向边，金额、标签、
+  时间和数据集特有字段全部保留；snapshot 使用边时间的半开窗口，不聚合平行边。
+- 新增 `AccountEventStream`，按时间稳定排序交易事件并保留完整 Polars 事件表；
+  transaction-as-node event stream 因需要额外 node-arrival 语义而继续显式拒绝。
+- 检查当前 venv 的 PyG 2.8.0 源码后确认不需要自定义子类：`Data` 原生接收
+  `edge_attr`、`time` 和任意 `**kwargs`，`TemporalData` 原生提供
+  `src/dst/t/msg`。`to_pyg_data()` 统一转换 `AccountGraph` 与
+  `TransactionGraph`，使用标准 `Data.edge_time` 自定义属性；
+  `to_pyg_temporal_data()` 返回标准 `TemporalData`。
+- PyG 特征列必须由研究员显式选择并为数值类型，避免隐藏的类别编码或归一化；
+  Polars `Duration` edge feature 会转换为秒。字符串 ID 与完整原始特征继续留在
+  AMLGraphX 的 Polars graph/stream 对象中。
+- 合成验证：Python 全套 `64 passed`，包含 account 三种表示、两种 node type 的
+  `Data`、event stream 的 `TemporalData`、edge feature/time、PyG Batch 和类别字段
+  显式拒绝测试。
+- IBM 全量真实 smoke test（`edge_delta=4h`、snapshot `bin_size=stride=1 day`）：
+  HI-Small account graph `515,080 / 5,078,345`、首个 account snapshot
+  `437,065 / 1,114,921`、transaction graph `5,078,345 / 7,853,196`、首个
+  transaction snapshot `1,114,921 / 488,435`；LI-Small 对应为
+  `705,903 / 6,924,049`、`599,154 / 1,524,807`、
+  `6,924,049 / 14,149,999`、`1,524,807 / 741,009`。两个数据集的 static、
+  snapshot、event stream 与 PyG tensor shape 全部通过。
+- 真实数据使用 `/tmp/amlgraphx-ibm-small-representations-*` 临时目录；测试结束后
+  已确认目录不存在，没有保留下载数据。
