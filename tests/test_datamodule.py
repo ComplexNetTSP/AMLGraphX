@@ -121,6 +121,28 @@ def test_data_module_builds_graph_before_partition_snapshots() -> None:
     assert len(list(data_module.test_snapshots())) == 1
 
 
+def test_evaluation_snapshots_keep_pre_split_context_but_mask_targets() -> None:
+    """Validation retains predecessor nodes without scoring historical rows."""
+    data_module = TransactionGraphDataModule(
+        _transactions(),
+        edge_delta=timedelta(days=2),
+        train_end=_date(3),
+        validation_end=_date(5),
+        test_end=_date(7),
+        window_size=timedelta(days=2),
+        stride=timedelta(days=2),
+    )
+    data_module.setup()
+
+    snapshot = next(data_module.validation_snapshots())
+
+    assert snapshot.graph.nodes["transaction_id"].to_list() == ["t1", "t2", "t3", "t4"]
+    assert snapshot.target_mask is not None
+    assert snapshot.target_mask.tolist() == [False, False, True, True]
+    assert snapshot.num_target_nodes == 2
+    assert snapshot.edge_index.tolist() == [[0, 1, 2], [1, 2, 3]]
+
+
 def test_data_module_rejects_invalid_time_configuration() -> None:
     """Unordered cutoffs and non-positive windows fail clearly."""
     with pytest.raises(ValueError, match="train_end"):

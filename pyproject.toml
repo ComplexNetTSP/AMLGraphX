@@ -13,7 +13,6 @@ dependencies = [
     "polars>=1.43.2",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.4",
-    "snapml>=1.17.2",
     "torch>=2.13.0",
     "torch-geometric>=2.8.0.post1",
     "torch-spatiotemporal>=0.9.5",
@@ -35,6 +34,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.4",
+    "snapml>=1.17.2",
 ]
 
 [[tool.uv.index]]

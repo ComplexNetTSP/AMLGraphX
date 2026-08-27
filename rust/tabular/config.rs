@@ -86,6 +86,14 @@ impl Config {
         if self.vertex_stats_feats.iter().any(|feature| *feature > 10) {
             return Err("vertex_stats_feats values must be in [0, 10]".into());
         }
+        if self
+            .vertex_stats_feats
+            .iter()
+            .enumerate()
+            .any(|(index, feature)| self.vertex_stats_feats[index + 1..].contains(feature))
+        {
+            return Err("vertex_stats_feats must not contain duplicates".into());
+        }
         for (name, pattern) in [
             ("fan", &self.fan),
             ("degree", &self.degree),

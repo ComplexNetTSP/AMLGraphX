@@ -406,6 +406,13 @@ def test_native_temporal_edge_boundary_rejects_invalid_arrays() -> None:
     with pytest.raises(ValueError, match="contiguous"):
         values = np.arange(6, dtype=np.uint32)[::2]
         temporal_edge_indices(values, values, np.arange(3, dtype=np.int64), 1)
+    with pytest.raises(ValueError, match="time delta exceeds"):
+        temporal_edge_indices(
+            np.array([0, 1], dtype=np.uint32),
+            np.array([1, 2], dtype=np.uint32),
+            np.array([np.iinfo(np.int64).min, np.iinfo(np.int64).max]),
+            2**64 - 1,
+        )
 
 
 def test_concurrent_transaction_graph_builds_are_deterministic() -> None:

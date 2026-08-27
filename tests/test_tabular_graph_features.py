@@ -190,6 +190,46 @@ def test_transform_causal_excludes_later_rows_in_its_input_batch() -> None:
     assert np.count_nonzero(causal_output[1, 4:]) == 1
 
 
+def test_causal_mode_rejects_retained_future_history() -> None:
+    """Strict causal mode cannot evaluate an event before retained state."""
+    preprocessor = GraphFeaturePreprocessor()
+    preprocessor.partial_fit(np.array([[1, 1, 2, 10]], dtype=float))
+
+    with pytest.raises(ValueError, match="later than retained history"):
+        preprocessor.transform_causal(np.array([[2, 2, 3, 9]], dtype=float))
+
+
+def test_vertex_statistics_respect_their_own_time_window() -> None:
+    """A longer fan window must not keep stale account statistics alive."""
+    preprocessor = GraphFeaturePreprocessor()
+    preprocessor.set_params(
+        _params(
+            vertex_stats_cols=[],
+            vertex_stats_feats=[1],
+            vertex_stats_tw=10,
+            fan=True,
+            fan_tw=100,
+            fan_bins=[2],
+            degree=False,
+            **{"scatter-gather": False, "temp-cycle": False, "lc-cycle": False},
+        )
+    )
+
+    output = preprocessor.transform(
+        np.array([[1, 1, 2, 0], [2, 1, 3, 50]], dtype=float)
+    )
+
+    assert output[0, -4] == 1
+
+
+def test_duplicate_vertex_statistic_features_are_rejected() -> None:
+    """Output width and native feature emission stay one-to-one."""
+    preprocessor = GraphFeaturePreprocessor()
+
+    with pytest.raises(ValueError, match="must not contain duplicates"):
+        preprocessor.set_params(_params(vertex_stats_feats=[0, 0]))
+
+
 def test_time_window_maximum_edge_count_and_duplicate_edge_ids() -> None:
     """Dynamic retention removes the inclusive lower boundary and duplicates."""
     preprocessor = GraphFeaturePreprocessor()
@@ -251,10 +291,10 @@ def test_serial_and_parallel_feature_extraction_match_exactly() -> None:
     np.testing.assert_array_equal(parallel, serial)
 
 
-def test_causal_mode_rejects_unsorted_timestamps() -> None:
+def test_causal_mode_rejects_non_strict_timestamps() -> None:
     """Causal processing fails early instead of silently creating future leakage."""
     preprocessor = GraphFeaturePreprocessor()
-    with pytest.raises(ValueError, match="non-decreasing"):
+    with pytest.raises(ValueError, match="strictly increasing"):
         preprocessor.transform_causal(
             np.array([[1, 1, 2, 2], [2, 2, 3, 1]], dtype=float)
         )

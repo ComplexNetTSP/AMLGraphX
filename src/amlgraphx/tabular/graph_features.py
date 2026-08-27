@@ -125,13 +125,23 @@ class GraphFeaturePreprocessor:
         """Enrich timestamp-ordered rows without within-batch future visibility.
 
         This method intentionally transforms one row at a time, after checking
-        non-decreasing timestamps. It is the strict temporal protocol for
-        leakage-sensitive evaluation; use ordinary :meth:`transform` for the
-        higher-throughput SnapML-compatible batch protocol.
+        strictly increasing timestamps against both the input and retained
+        history. It is the strict temporal protocol for leakage-sensitive
+        evaluation; use ordinary :meth:`transform` for the higher-throughput
+        SnapML-compatible batch protocol.
         """
         matrix = _as_feature_matrix(features)
-        if matrix.shape[0] > 1 and np.any(np.diff(matrix[:, 3]) < 0.0):
-            raise ValueError("transform_causal requires non-decreasing timestamps")
+        if matrix.shape[0] > 1 and np.any(np.diff(matrix[:, 3]) <= 0.0):
+            raise ValueError("transform_causal requires strictly increasing timestamps")
+        latest_timestamp = self._native.latest_timestamp()
+        if (
+            matrix.shape[0] > 0
+            and latest_timestamp is not None
+            and matrix[0, 3] <= latest_timestamp
+        ):
+            raise ValueError(
+                "transform_causal requires timestamps later than retained history"
+            )
         if matrix.shape[0] == 0:
             return self.transform(matrix)
         return np.vstack(
@@ -199,12 +209,9 @@ def _engineered_width(params: Mapping[str, Any]) -> int:
         if params[name]
     )
     if params["vertex_stats"]:
-        structural = sum(
-            feature in {0, 1, 2} for feature in params["vertex_stats_feats"]
-        )
-        numeric = sum(
-            feature in range(3, 11) for feature in params["vertex_stats_feats"]
-        )
+        requested = set(params["vertex_stats_feats"])
+        structural = sum(feature in requested for feature in (0, 1, 2))
+        numeric = sum(feature in requested for feature in range(3, 11))
         width += 4 * (structural + len(params["vertex_stats_cols"]) * numeric)
     return width
 

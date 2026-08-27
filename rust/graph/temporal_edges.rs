@@ -55,6 +55,7 @@ pub(crate) fn temporal_edge_indices<'py>(
         .map_err(|_| "native temporal edge worker panicked".to_owned())
     });
     let result = result.map_err(PyRuntimeError::new_err)?;
+    let result = result.map_err(PyValueError::new_err)?;
 
     Ok((
         PyArray1::from_vec(py, result.sources),
@@ -98,9 +99,14 @@ fn validate(
     Ok(())
 }
 
-fn build_edges(sources: &[u32], targets: &[u32], timestamps: &[i64], delta_ns: i128) -> EdgeArrays {
+fn build_edges(
+    sources: &[u32],
+    targets: &[u32],
+    timestamps: &[i64],
+    delta_ns: i128,
+) -> Result<EdgeArrays, String> {
     if sources.is_empty() || delta_ns == 0 {
-        return EdgeArrays::default();
+        return Ok(EdgeArrays::default());
     }
 
     let account_count = sources
@@ -134,7 +140,7 @@ fn build_edges(sources: &[u32], targets: &[u32], timestamps: &[i64], delta_ns: i
                 delta_ns,
             )
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let edge_count = chunks.iter().map(|chunk| chunk.sources.len()).sum();
     let mut result = EdgeArrays {
@@ -145,7 +151,7 @@ fn build_edges(sources: &[u32], targets: &[u32], timestamps: &[i64], delta_ns: i
     for mut chunk in chunks {
         result.append(&mut chunk);
     }
-    result
+    Ok(result)
 }
 
 fn build_chunk(
@@ -154,7 +160,7 @@ fn build_chunk(
     outgoing: &[Vec<usize>],
     timestamps: &[i64],
     delta_ns: i128,
-) -> EdgeArrays {
+) -> Result<EdgeArrays, String> {
     let mut result = EdgeArrays::default();
     for (local_position, &target_code) in target_codes.iter().enumerate() {
         let source_position = offset + local_position;
@@ -172,10 +178,13 @@ fn build_chunk(
         for &target_position in &candidates[start..end] {
             result.sources.push(source_position as i64);
             result.targets.push(target_position as i64);
-            result.deltas.push(timestamps[target_position] - timestamp);
+            let duration = timestamps[target_position]
+                .checked_sub(timestamp)
+                .ok_or("time delta exceeds the supported int64 nanosecond range")?;
+            result.deltas.push(duration);
         }
     }
-    result
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -189,7 +198,7 @@ mod tests {
         delta: i128,
     ) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
         validate(sources, targets, timestamps, delta).unwrap();
-        let result = build_edges(sources, targets, timestamps, delta);
+        let result = build_edges(sources, targets, timestamps, delta).unwrap();
         (result.sources, result.targets, result.deltas)
     }
 
@@ -228,6 +237,16 @@ mod tests {
         assert_eq!(
             edges(&[0, 1], &[1, 2], &[i64::MAX - 1, i64::MAX], i128::MAX),
             (vec![0], vec![1], vec![1]),
+        );
+    }
+
+    #[test]
+    fn unrepresentable_duration_is_rejected() {
+        assert_eq!(
+            build_edges(&[0, 1], &[1, 2], &[i64::MIN, i64::MAX], i128::MAX,)
+                .err()
+                .as_deref(),
+            Some("time delta exceeds the supported int64 nanosecond range"),
         );
     }
 

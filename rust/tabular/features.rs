@@ -457,7 +457,14 @@ fn append_vertex_statistics(
         (target, true),
         (target, false),
     ] {
-        append_one_vertex_statistics(output, state, vertex, outgoing, f64::NEG_INFINITY, config);
+        append_one_vertex_statistics(
+            output,
+            state,
+            vertex,
+            outgoing,
+            state.latest_timestamp().unwrap_or(row[3]) - config.vertex_stats_tw,
+            config,
+        );
     }
     Ok(())
 }

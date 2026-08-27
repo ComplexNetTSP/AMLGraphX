@@ -94,6 +94,11 @@ impl NativeGraphFeaturePreprocessor {
     fn active_edge_count(&self) -> usize {
         self.state.edge_count()
     }
+
+    /// Return the newest retained event time for strict causal validation.
+    fn latest_timestamp(&self) -> Option<f64> {
+        self.state.latest_timestamp()
+    }
 }
 
 impl NativeGraphFeaturePreprocessor {

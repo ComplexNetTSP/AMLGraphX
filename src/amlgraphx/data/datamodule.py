@@ -156,6 +156,8 @@ class GraphSnapshot:
         start_time: Inclusive beginning of the window.
         end_time: Exclusive end of the window.
         index: One-based snapshot number within its partition.
+        target_mask: Optional local boolean mask for prediction targets. A
+            ``None`` value means every node is a target.
     """
 
     graph: AccountGraph | TransactionGraph
@@ -163,6 +165,7 @@ class GraphSnapshot:
     start_time: datetime
     end_time: datetime
     index: int
+    target_mask: Tensor | None = None
 
     @property
     def num_nodes(self) -> int:
@@ -173,6 +176,13 @@ class GraphSnapshot:
     def num_edges(self) -> int:
         """Return sparse edge count / 返回 snapshot 中的稀疏边数量。"""
         return self.edge_index.shape[1]
+
+    @property
+    def num_target_nodes(self) -> int:
+        """Return prediction-target count / 返回预测目标节点数量。"""
+        return (
+            self.num_nodes if self.target_mask is None else int(self.target_mask.sum())
+        )
 
 
 def split_transaction_graph(
@@ -244,6 +254,7 @@ def sliding_snapshots(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     drop_last: bool = True,
+    context_size: timedelta | None = None,
 ) -> Iterator[GraphSnapshot]:
     """Yield sparse graph snapshots over half-open time windows.
 
@@ -255,7 +266,11 @@ def sliding_snapshots(
     ``[0, 7)``、``[3, 10)``、``[6, 13)``。stride 控制窗口起点移动距离，
     不会改变图边的定义。
 
-    Empty windows are skipped. By default, a final window that crosses
+    ``context_size`` optionally prepends historical nodes to each snapshot.
+    ``target_mask`` then marks only nodes in ``[start_time, end_time)`` as
+    prediction targets, preserving causal context without scoring it.
+
+    Empty target windows are skipped. By default, a final window that crosses
     ``end_time`` is omitted. Set ``drop_last=False`` to emit that final window
     with its end clipped to the requested range.
 
@@ -266,6 +281,7 @@ def sliding_snapshots(
         start_time: Optional inclusive first window start.
         end_time: Optional exclusive sampling boundary.
         drop_last: Whether to omit a final incomplete window.
+        context_size: Optional non-negative history retained before each window.
 
     Yields:
         A lazy ``Iterator[GraphSnapshot]``. Each yielded snapshot contains a
@@ -284,6 +300,8 @@ def sliding_snapshots(
     """
     _validate_duration(window_size, "window_size")
     _validate_duration(stride, "stride")
+    if context_size is not None:
+        _validate_duration(context_size, "context_size", allow_zero=True)
     _validate_graph(graph)
 
     bounds = _resolve_sampling_bounds(graph, start_time, end_time)
@@ -304,8 +322,9 @@ def sliding_snapshots(
             start_time=window_start,
             end_time=window_end,
             index=snapshot_index,
+            context_size=context_size,
         )
-        if snapshot.num_nodes > 0:
+        if snapshot.num_target_nodes > 0:
             yield snapshot
             snapshot_index += 1
         window_start += stride
@@ -317,20 +336,23 @@ class TransactionGraphDataModule:
     English pipeline:
         1. Build one full transaction graph.
         2. Split its transaction nodes by timestamp.
-        3. Sample each split independently with the same window/stride policy.
+        3. Sample targets by split while retaining ``edge_delta`` history for
+           validation and test windows.
 
     中文流程：
         1. 先构建一张完整交易图。
         2. 按交易节点时间划分数据集。
-        3. 在每个分区内使用同一组 window/stride 独立采样。
+        3. 按分区采样目标节点，并为验证/测试窗口保留 ``edge_delta`` 历史。
 
     ``setup`` is intentionally explicit because graph construction materializes
     data and can be expensive. / ``setup`` 需要显式调用，因为建图会物化数据，
     可能是昂贵操作。
 
-    The module builds one complete transaction graph first, divides it by node
-    timestamps, and samples each partition independently. Call ``setup()``
-    before requesting graphs or snapshots.
+    The module builds one complete transaction graph first. It retains strict
+    induced subgraphs in ``splits`` for that protocol, while validation and
+    test snapshots draw their ``edge_delta`` lookback context from the full
+    graph and expose only in-window nodes through ``target_mask``. Call
+    ``setup()`` before requesting graphs or snapshots.
 
     Input / 输入：
         ``transactions`` is a canonical transaction ``DataFrame`` or
@@ -493,20 +515,22 @@ class TransactionGraphDataModule:
 
         Returns / 返回：
             ``Iterator[GraphSnapshot]`` for the half-open interval
-            ``[train_end, validation_end)``. Each yielded snapshot has sparse
-            ``edge_index`` shape ``(2, E_window)``.
+            ``[train_end, validation_end)``. Each yielded snapshot includes
+            ``edge_delta`` history and marks only validation nodes with
+            ``target_mask``.
 
             返回验证区间 ``[train_end, validation_end)`` 的
             ``Iterator[GraphSnapshot]``；每个 snapshot 的稀疏
             ``edge_index`` shape 为 ``(2, E_window)``。
         """
         return sliding_snapshots(
-            self.splits.validation,
+            self.full_graph,
             window_size=self.window_size,
             stride=self.stride,
             start_time=self.train_end,
             end_time=self.validation_end,
             drop_last=self.drop_last,
+            context_size=self.edge_delta,
         )
 
     def test_snapshots(self) -> Iterator[GraphSnapshot]:
@@ -515,20 +539,21 @@ class TransactionGraphDataModule:
         Returns / 返回：
             ``Iterator[GraphSnapshot]`` for
             ``[validation_end, test_end)`` or the graph's inferred end when
-            ``test_end`` is ``None``. Each yielded tensor has shape
-            ``(2, E_window)``.
+            ``test_end`` is ``None``. Each snapshot includes ``edge_delta``
+            history and marks only test nodes with ``target_mask``.
 
             返回测试区间 ``[validation_end, test_end)`` 的
             ``Iterator[GraphSnapshot]``；``test_end`` 为 ``None`` 时使用图的
             推断终点。每个 tensor 的 shape 为 ``(2, E_window)``。
         """
         return sliding_snapshots(
-            self.splits.test,
+            self.full_graph,
             window_size=self.window_size,
             stride=self.stride,
             start_time=self.validation_end,
             end_time=self.test_end,
             drop_last=self.drop_last,
+            context_size=self.edge_delta,
         )
 
 
@@ -538,11 +563,12 @@ def _build_snapshot(
     start_time: datetime,
     end_time: datetime,
     index: int,
+    context_size: timedelta | None = None,
 ) -> GraphSnapshot:
     """Select one window and convert its graph endpoints to local indices.
 
-    中文：先用半开区间选择窗口节点，再构造诱导子图，最后把稳定的交易 ID
-    映射为当前 snapshot 内的连续整数索引。
+    中文：先选择窗口及其可选历史 context 节点，再构造诱导子图，最后把稳定的
+    交易 ID 映射为当前 snapshot 内的连续整数索引。
 
     Returns / 返回：
         A ``GraphSnapshot`` whose node table has shape ``(N_window, C)``, edge
@@ -555,14 +581,21 @@ def _build_snapshot(
         dtype 为 ``torch.long``；``index`` 会作为 snapshot 的从 1 开始编号保留。
     """
     timestamp = pl.col("timestamp")
-    nodes = graph.nodes.filter((timestamp >= start_time) & (timestamp < end_time))
+    context_start = (
+        start_time - context_size if context_size is not None else start_time
+    )
+    nodes = graph.nodes.filter((timestamp >= context_start) & (timestamp < end_time))
     snapshot_graph = _induced_graph(graph, nodes)
+    target_mask = torch.from_numpy((nodes["timestamp"] >= start_time).to_numpy()).to(
+        dtype=torch.bool
+    )
     return GraphSnapshot(
         graph=snapshot_graph,
         edge_index=_edge_index(snapshot_graph),
         start_time=start_time,
         end_time=end_time,
         index=index,
+        target_mask=target_mask,
     )
 
 
