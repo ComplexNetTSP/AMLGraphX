@@ -2,7 +2,9 @@
 
 from collections.abc import Mapping
 
+from .banksim import BankSim
 from .base import Dataset
+from .elliptic import Elliptic, EllipticPlusPlus
 from .ibm_aml import IBMAML
 from .paysim import PaySim
 from .samld import SAML
@@ -11,6 +13,9 @@ DATASET_REGISTRY: Mapping[str, type[Dataset]] = {
     "ibm-aml": IBMAML,
     "paysim": PaySim,
     "saml-d": SAML,
+    "banksim": BankSim,
+    "elliptic": Elliptic,
+    "elliptic++": EllipticPlusPlus,
 }
 
 

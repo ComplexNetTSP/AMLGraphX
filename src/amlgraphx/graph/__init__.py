@@ -10,6 +10,7 @@ from .builders import (
     AccountGraph,
     TransactionGraph,
     build_account_graph,
+    build_precomputed_transaction_graph,
     build_time_aware_account_graph,
     build_transaction_graph,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "build_account_event_stream",
     "build_account_graph",
     "build_account_snapshots",
+    "build_precomputed_transaction_graph",
     "build_time_aware_account_graph",
     "build_transaction_graph",
     "build_transaction_snapshots",

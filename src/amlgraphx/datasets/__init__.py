@@ -2,12 +2,14 @@
 
 from amlgraphx.data.schema import normalize_transactions
 
+from .banksim import BankSim
 from .base import (
     Dataset,
     DatasetMetadata,
     DatasetSource,
     LabelLevel,
     TaskType,
+    TransactionGraphDataset,
     clean_lazy_frame,
 )
 from .download import (
@@ -19,6 +21,7 @@ from .download import (
     find_tabular_file,
     validate_dataset_files,
 )
+from .elliptic import Elliptic, EllipticPlusPlus
 from .ibm_aml import IBMAML, IBMAMLVariant
 from .loader import load_dataset
 from .paysim import PaySim
@@ -28,15 +31,19 @@ __all__ = [
     "DEFAULT_CACHE_ROOT",
     "IBMAML",
     "SAML",
+    "BankSim",
     "Dataset",
     "DatasetDownloadError",
     "DatasetMetadata",
     "DatasetSource",
+    "Elliptic",
+    "EllipticPlusPlus",
     "HuggingFaceDownloader",
     "IBMAMLVariant",
     "LabelLevel",
     "PaySim",
     "TaskType",
+    "TransactionGraphDataset",
     "clean_lazy_frame",
     "extract_zip",
     "find_dataset_file",

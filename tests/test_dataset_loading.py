@@ -10,7 +10,10 @@ from pytest import MonkeyPatch
 
 from amlgraphx.datasets import (
     SAML,
+    BankSim,
     DatasetDownloadError,
+    Elliptic,
+    EllipticPlusPlus,
     PaySim,
     clean_lazy_frame,
     extract_zip,
@@ -127,9 +130,60 @@ def test_paysim_transactions_support_both_graph_views(
     ]
     assert build_account_graph(transactions).num_edges == 2
     assert (
-        build_transaction_graph(
-            transactions,
-            delta=timedelta(hours=1),
-        ).num_edges
-        == 1
+        build_transaction_graph(transactions, delta=timedelta(hours=1)).num_edges == 1
     )
+
+
+def test_banksim_exposes_customer_merchant_transactions_with_logical_steps(
+    tmp_path: Path,
+) -> None:
+    """BankSim keeps its step while supplying canonical graph time."""
+    (tmp_path / "bs140513_032310.csv").write_text(
+        "step,customer,merchant,amount,fraud\n0,C1,M1,4.0,0\n1,C2,M1,5.0,1\n",
+        encoding="utf-8",
+    )
+    transactions = BankSim(local_dir=tmp_path).transactions().collect()
+
+    assert transactions["timestamp"].to_list() == [
+        datetime(1970, 1, 1, tzinfo=UTC),
+        datetime(1970, 1, 2, tzinfo=UTC),
+    ]
+    assert transactions.select("source", "target", "label").to_dicts() == [
+        {"source": "C1", "target": "M1", "label": 0},
+        {"source": "C2", "target": "M1", "label": 1},
+    ]
+
+
+def test_elliptic_adapters_return_the_published_transaction_graphs(
+    tmp_path: Path,
+) -> None:
+    """Prebuilt edge lists are imported rather than re-derived from transfers."""
+    original = tmp_path / "original" / "elliptic_bitcoin_dataset"
+    original.mkdir(parents=True)
+    (original / "elliptic_txs_features.csv").write_text(
+        "1,1,0.1\n2,2,0.2\n", encoding="utf-8"
+    )
+    (original / "elliptic_txs_classes.csv").write_text(
+        "txId,class\n1,1\n2,2\n", encoding="utf-8"
+    )
+    (original / "elliptic_txs_edgelist.csv").write_text(
+        "txId1,txId2\n1,2\n", encoding="utf-8"
+    )
+    plus = tmp_path / "plus"
+    plus.mkdir()
+    (plus / "txs_features.csv").write_text(
+        "txId,Time step,feature\n1,1,0.1\n2,2,0.2\n", encoding="utf-8"
+    )
+    (plus / "txs_classes.csv").write_text("txId,class\n1,1\n2,3\n", encoding="utf-8")
+    (plus / "txs_edgelist.csv").write_text("txId1,txId2\n1,2\n", encoding="utf-8")
+
+    for dataset in (
+        Elliptic(local_dir=tmp_path / "original"),
+        EllipticPlusPlus(local_dir=plus),
+    ):
+        graph = dataset.transaction_graph(step_size=timedelta(hours=1))
+        assert graph.num_nodes == 2
+        assert graph.edges["edge_relation"].to_list() == ["precomputed"]
+        assert graph.nodes["timestamp"].to_list()[1] - graph.nodes[
+            "timestamp"
+        ].to_list()[0] == timedelta(hours=1)

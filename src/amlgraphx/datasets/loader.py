@@ -18,7 +18,8 @@ def load_dataset(
     """Create, cache, and prepare a named AMLGraphX dataset.
 
     Args:
-        name: Registry name such as ``ibm-aml``, ``paysim``, or ``saml-d``.
+        name: Registry name such as ``ibm-aml``, ``paysim``, ``banksim``,
+            ``elliptic``, ``elliptic++``, or ``saml-d``.
         variant: Required IBM AML variant.
         revision: Hugging Face repository revision.
         cache_dir: Root directory for the AMLGraphX cache.
