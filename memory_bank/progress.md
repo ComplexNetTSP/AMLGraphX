@@ -307,6 +307,10 @@ Rust Rayon 的 `RAYON_NUM_THREADS`（1、2、4、8、16、32、64）。每个条
 - `prepare_graph()` 现在完整支持 account-as-node 的 time-aware static、snapshot
   和 event stream。static/snapshot 每笔交易仍是一条独立有向边，金额、标签、
   时间和数据集特有字段全部保留；snapshot 使用边时间的半开窗口，不聚合平行边。
+- `examples/ibm_transaction_graph.py` 现在从同一份 IBM HI-Small canonical
+  transactions 展示三种 temporal mode：transaction-node static、transaction-node
+  daily snapshots，以及自然 account-level event stream；同时明确 transaction-node
+  event stream 仍因 node-arrival 语义未定义而不支持。
 - 新增 `AccountEventStream`，按时间稳定排序交易事件并保留完整 Polars 事件表；
   transaction-as-node event stream 因需要额外 node-arrival 语义而继续显式拒绝。
 - 检查当前 venv 的 PyG 2.8.0 源码后确认不需要自定义子类：`Data` 原生接收
@@ -342,3 +346,51 @@ Rust Rayon 的 `RAYON_NUM_THREADS`（1、2、4、8、16、32、64）。每个条
 - `TransactionGraphDataModule` 的 train/validation/test snapshot 都会保留
   `edge_delta` lookback，并通过局部 `target_mask` 区分历史 context 与预测目标；
   原有 `split_transaction_graph()` 仍保留严格诱导子图协议。
+
+## Research workflow package scaffold
+
+位置：`src/amlgraphx/`
+
+- 新增 AML/Fraud research workflow 的空包结构，覆盖 `baselines`、`features`、
+  `metrics`、`evaluation`、`tuning`、`explain`、`tracking`、`training`、
+  `experiments`、`sampling` 和 `nn`。
+- `baselines` 预留 linear/tree/XGBoost/LightGBM/CatBoost 模块，`explain`
+  预留 SHAP，`tuning` 预留 Optuna，`tracking` 预留 MLflow/TensorBoard。
+- 本次只建立目录和占位文件，没有加入实现代码、公共导出或新依赖；现有
+  `data`、`graph`、`tabular` 和旧的 `model` 目录保持不变。
+- 补充类别不平衡研究结构：`sampling/imbalance.py` 预留通用采样和增强，
+  `nn/models/imbalanced/` 预留 GraphSMOTE 与 PC-GNN；`baselines` 预留异常检测、
+  PU learning 和 learning-to-rank，`training` 预留不平衡损失与 fine-tuning，
+  `evaluation/stability.py` 预留 bootstrap 和重复运行稳定性评估。仍未加入实现、
+  公共导出或依赖。
+
+## Classical baseline dependencies
+
+- 使用 `uv add` 将 `scikit-learn`、`xgboost`、`lightgbm` 和 `catboost` 加入运行时
+  依赖，并同步更新 `uv.lock`。
+- 当前环境已验证可导入：scikit-learn 1.9.0、XGBoost 3.4.1、LightGBM 4.7.0、
+  CatBoost 1.2.10；XGBoost 已有第一个 baseline wrapper。
+- 新增 `baselines.XGBoostBaseline` 作为第一个薄适配器示例：保留原生
+  `XGBClassifier` 参数，默认 `eval_metric="aucpr"`，支持 `sample_weight`、
+  验证集、概率预测、模型保存，以及显式开启的 `use_shap`/`explain()`；不在
+  baseline 内实现采样、切分或指标逻辑。
+- 新增 `baselines.CatBoostBaseline` 和 `baselines.LightGBMBaseline`，沿用同一
+  契约：原生参数、`sample_weight`、概率预测、模型保存，以及显式开启的 SHAP
+  `explain()`；各库的原生训练实现仍由对应第三方包负责。
+- 使用 `uv add` 将 `shap` 0.52.0 和 `mlflow` 3.15.2 加入运行时依赖并同步
+  `uv.lock`；`explain_tree_model()` 已提供 SHAP TreeExplainer 薄封装，MLflow
+  tracking 模块仍等待后续实现。
+
+## Public documentation foundation
+
+位置：`docs/`、`.gitignore`
+
+- 新增面向用户的 Sphinx + MyST + Furo 文档：安装、quickstart、核心图与时间语义、
+  数据集契约、研究工作流和公共 Python API 参考。
+- 文档只呈现稳定的 Python 用户接口；私有实现与尚未实现的 workflow scaffold 不作为
+  可用功能宣传。
+- 修复 MyST Markdown parser 配置、Google-style docstring 解析、toctree 完整性和
+  API 重导出重复索引；`docs/` 源文件已取消忽略，只有生成的 `_build/` 保持忽略。
+- 验证：`uv run sphinx-build -W -b html docs docs/_build/html`、
+  `uv run ruff check docs/conf.py` 和 `uv run ruff format --check docs/conf.py`
+  均通过；构建产物已移至系统回收站。
