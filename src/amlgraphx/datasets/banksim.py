@@ -63,7 +63,10 @@ class BankSim(Dataset):
     def transactions(self) -> pl.LazyFrame:
         """Return customer→merchant rows with logical daily step timestamps."""
         frame = clean_lazy_frame(
-            pl.scan_csv(find_dataset_file(self.download(), self._file)),
+            pl.scan_csv(
+                find_dataset_file(self.download(), self._file),
+                quote_char="'",
+            ),
             source_column="customer",
             target_column="merchant",
         )

@@ -122,6 +122,7 @@ def test_paysim_transactions_support_both_graph_views(
         "amlgraphx.datasets.download.hf_hub_download",
         lambda **_: str(archive),
     )
+
     transactions = PaySim(cache_dir=tmp_path / "cache").transactions()
 
     assert transactions.collect()["timestamp"].to_list() == [
@@ -132,6 +133,19 @@ def test_paysim_transactions_support_both_graph_views(
     assert (
         build_transaction_graph(transactions, delta=timedelta(hours=1)).num_edges == 1
     )
+
+
+def test_logical_timestamp_requires_timezone_aware_origin() -> None:
+    """Logical ordinal timestamps must be portable across host timezones."""
+    from amlgraphx.data import logical_timestamp_from_step
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        logical_timestamp_from_step(
+            pl.LazyFrame({"step": [0]}),
+            step_column="step",
+            step_size=timedelta(days=1),
+            origin=datetime(2024, 1, 1),  # noqa: DTZ001
+        )
 
 
 def test_banksim_exposes_customer_merchant_transactions_with_logical_steps(
@@ -151,6 +165,20 @@ def test_banksim_exposes_customer_merchant_transactions_with_logical_steps(
     assert transactions.select("source", "target", "label").to_dicts() == [
         {"source": "C1", "target": "M1", "label": 0},
         {"source": "C2", "target": "M1", "label": 1},
+    ]
+
+
+def test_banksim_reads_published_single_quoted_csv(tmp_path: Path) -> None:
+    """BankSim's published quoting convention is accepted."""
+    (tmp_path / "bs140513_032310.csv").write_text(
+        "'step','customer','merchant','amount','fraud'\n0,'C1','M1',4.0,0\n",
+        encoding="utf-8",
+    )
+
+    result = BankSim(local_dir=tmp_path).transactions().collect()
+
+    assert result.select("source", "target", "label").to_dicts() == [
+        {"source": "C1", "target": "M1", "label": 0}
     ]
 
 

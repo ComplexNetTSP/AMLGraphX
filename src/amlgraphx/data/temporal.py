@@ -40,7 +40,8 @@ def logical_timestamp_from_step(
 
     Raises:
         TypeError: If the inputs do not describe a datetime-based logical axis.
-        ValueError: If the column is absent or the step size is not positive.
+        ValueError: If the column is absent, the origin is naive, or the step
+            size is not positive.
     """
     if not isinstance(frame, pl.LazyFrame):
         raise TypeError("frame must be a polars.LazyFrame")
@@ -50,6 +51,8 @@ def logical_timestamp_from_step(
         raise ValueError("step_size must be a positive datetime.timedelta")
     if not isinstance(origin, datetime):
         raise TypeError("origin must be a datetime")
+    if origin.tzinfo is None or origin.utcoffset() is None:
+        raise ValueError("origin must be timezone-aware")
 
     nanoseconds = _timedelta_to_nanoseconds(step_size)
     origin_ns = int(origin.timestamp() * 1_000_000_000)

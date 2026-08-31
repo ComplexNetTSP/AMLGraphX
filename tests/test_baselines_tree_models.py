@@ -69,3 +69,19 @@ def test_lightgbm_baseline_loads_native_booster(tmp_path: Path) -> None:
     restored = LightGBMBaseline().load_model(path)
 
     assert np.allclose(restored.predict_proba(X), expected)
+
+
+def test_lightgbm_forwards_default_metric_to_evaluation_fit() -> None:
+    """The AML ranking metric is passed only when an eval set is supplied."""
+    model = LightGBMBaseline(n_estimators=2, n_jobs=1, random_state=0)
+    original_fit = model.estimator.fit
+    captured: dict[str, object] = {}
+
+    def capture(*args: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return original_fit(*args, **kwargs)
+
+    model.estimator.fit = capture  # type: ignore[method-assign]
+    model.fit(X, y, eval_set=[(X, y)])
+
+    assert captured["eval_metric"] == "average_precision"

@@ -1,5 +1,18 @@
 # AMLGraphX 当前进度
 
+## Graph-native dataset adapters and review fixes
+
+- 新增 `BankSim`、`Elliptic` 和 `EllipticPlusPlus` 数据集适配器；BankSim 保留
+  customer→merchant 交易与 raw `step`，Elliptic 系列导入数据集提供的 transaction
+  node/edge 文件，不重新推导关系。
+- 新增 `logical_timestamp_from_step()`，要求 timezone-aware origin，并以显式
+  `step_size` 生成 UTC logical timestamp；新增 `build_precomputed_transaction_graph()`。
+- BankSim 兼容公开文件的单引号 CSV；可复用风险指标同时从 `amlgraphx.metrics` 导出，
+  evaluation 路径保留兼容导出。LightGBM 在带 `eval_set` 时将默认
+  `average_precision` 传给 `fit`；GFP 示例在 raw boundary 先切分，避免 batch 泄漏。
+- 删除尚未有实现的实验、训练、采样、tracking、tuning、NN、feature 和 baseline
+  scaffold 文件；保留已有真实实现。测试覆盖上述边界和 public metrics import。
+
 ## AML/Fraud binary risk-score evaluation
 
 位置：`src/amlgraphx/evaluation/`、`examples/ibm_hi_small_gfp_xgboost.py`

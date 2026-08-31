@@ -101,6 +101,26 @@ def test_binary_risk_evaluation_rejects_duplicate_budgets() -> None:
         )
 
 
+@pytest.mark.parametrize("budget", [(1.9,), (True,)])
+def test_binary_risk_evaluation_rejects_invalid_budget_types(
+    budget: tuple[object],
+) -> None:
+    """Invalid fixed budgets are rejected before normalization."""
+    with pytest.raises(TypeError, match="integer"):
+        evaluate_binary_risk_scores(
+            [0, 1],
+            [0.1, 0.9],
+            top_k=budget,  # type: ignore[arg-type]
+        )
+
+
+def test_metrics_are_public_from_canonical_namespace() -> None:
+    """Reusable metrics are available from amlgraphx.metrics."""
+    from amlgraphx.metrics import evaluate_binary_risk_scores as canonical
+
+    assert canonical is evaluate_binary_risk_scores
+
+
 def test_torch_metric_instances_are_composable_in_a_metric_dictionary() -> None:
     """Independent metrics update over batches and compute full-split values."""
     score = torch.tensor([0.1, 0.9, 0.8, 0.2])

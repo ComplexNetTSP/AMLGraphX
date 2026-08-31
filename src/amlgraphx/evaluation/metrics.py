@@ -239,6 +239,8 @@ def evaluate_binary_risk_scores(
             "Average Precision and ROC-AUC require both positive and negative labels"
         )
 
+    for value in top_k:
+        _validate_k(value, y.size)
     budgets = [int(value) for value in top_k]
     budgets.extend(_k_from_fraction(value, y.size) for value in top_fractions)
     if len(set(budgets)) != len(budgets):

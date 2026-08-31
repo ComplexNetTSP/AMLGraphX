@@ -166,17 +166,22 @@ def main() -> None:
                 "lc-cycle_tw": one_day,
             }
         )
-        gfp.fit(raw_features[:WARMUP_TRANSACTIONS])
-        enriched = enrich_in_batches(gfp, raw_features[WARMUP_TRANSACTIONS:])
+        prediction_features = raw_features[WARMUP_TRANSACTIONS:]
         target_labels = labels[WARMUP_TRANSACTIONS:]
-        if not np.isfinite(enriched).all():
+        train_end = int(0.75 * prediction_features.shape[0])
+        gfp.fit(raw_features[:WARMUP_TRANSACTIONS])
+        enriched_train = enrich_in_batches(gfp, prediction_features[:train_end])
+        enriched_test = enrich_in_batches(gfp, prediction_features[train_end:])
+        if (
+            not np.isfinite(enriched_train).all()
+            or not np.isfinite(enriched_test).all()
+        ):
             raise ValueError("GFP produced non-finite features")
 
         # Account/edge IDs are graph identifiers, not tabular model features.
         # GFP output retains the raw layout, so only amount and appended features remain.
-        X = enriched[:, 4:].astype(np.float32)
-        train_end = int(0.75 * X.shape[0])
-        X_train, X_test = X[:train_end], X[train_end:]
+        X_train = enriched_train[:, 4:].astype(np.float32)
+        X_test = enriched_test[:, 4:].astype(np.float32)
         y_train, y_test = target_labels[:train_end], target_labels[train_end:]
         for name, y in (("train", y_train), ("test", y_test)):
             require_both_classes(y, name)
@@ -211,8 +216,14 @@ def main() -> None:
                     target_tensor[start : start + BATCH_SIZE],
                 )
         results = {name: metric.compute().item() for name, metric in metrics.items()}
-        print(f"Rows / 交易数: raw={raw_features.shape[0]}, targets={X.shape[0]}")
-        print(f"GFP matrix / GFP 特征矩阵: {enriched.shape}")
+        print(
+            f"Rows / 交易数: raw={raw_features.shape[0]}, "
+            f"targets={X_train.shape[0] + X_test.shape[0]}"
+        )
+        print(
+            "GFP matrix / GFP 特征矩阵: "
+            f"train={enriched_train.shape}, test={enriched_test.shape}"
+        )
         print("Test metrics / 测试指标:")
         for name, value in results.items():
             print(f"  {name}: {value}")
