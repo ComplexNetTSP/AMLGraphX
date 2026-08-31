@@ -12,6 +12,7 @@ from amlgraphx.data import (
     split_transaction_graph,
 )
 from amlgraphx.graph import build_transaction_graph
+from amlgraphx.split import TemporalSplit, build_temporal_node_masks
 
 
 def _transactions() -> pl.DataFrame:
@@ -54,6 +55,24 @@ def test_temporal_split_removes_cross_partition_edges() -> None:
     assert splits.train.num_edges == 1
     assert splits.validation.num_edges == 1
     assert splits.test.num_edges == 1
+
+
+def test_temporal_node_masks_keep_the_complete_graph() -> None:
+    """Chronological masks preserve nodes and cross-partition graph edges."""
+    graph = build_transaction_graph(_transactions(), delta=timedelta(days=2))
+    original_edges = graph.edges
+
+    masks = build_temporal_node_masks(
+        graph,
+        TemporalSplit(train_end=_date(3), validation_end=_date(5)),
+    )
+
+    assert masks.train_mask.tolist() == [True, True, False, False, False, False]
+    assert masks.validation_mask.tolist() == [False, False, True, True, False, False]
+    assert masks.test_mask.tolist() == [False, False, False, False, True, True]
+    assert masks.num_nodes == graph.num_nodes
+    assert graph.edges.equals(original_edges)
+    assert graph.num_edges == 5
 
 
 def test_sliding_snapshots_use_local_sparse_edge_indices() -> None:
@@ -100,6 +119,49 @@ def test_data_module_builds_graph_before_partition_snapshots() -> None:
     assert len(list(data_module.train_snapshots())) == 1
     assert len(list(data_module.validation_snapshots())) == 1
     assert len(list(data_module.test_snapshots())) == 1
+
+
+def test_evaluation_snapshots_keep_pre_split_context_but_mask_targets() -> None:
+    """Validation retains predecessor nodes without scoring historical rows."""
+    data_module = TransactionGraphDataModule(
+        _transactions(),
+        edge_delta=timedelta(days=2),
+        train_end=_date(3),
+        validation_end=_date(5),
+        test_end=_date(7),
+        window_size=timedelta(days=2),
+        stride=timedelta(days=2),
+    )
+    data_module.setup()
+
+    snapshot = next(data_module.validation_snapshots())
+
+    assert snapshot.graph.nodes["transaction_id"].to_list() == ["t1", "t2", "t3", "t4"]
+    assert snapshot.target_mask is not None
+    assert snapshot.target_mask.tolist() == [False, False, True, True]
+    assert snapshot.num_target_nodes == 2
+    assert snapshot.edge_index.tolist() == [[0, 1, 2], [1, 2, 3]]
+
+
+def test_training_snapshots_keep_lookback_context_but_mask_targets() -> None:
+    """Later training windows use the same causal graph context as evaluation."""
+    data_module = TransactionGraphDataModule(
+        _transactions(),
+        edge_delta=timedelta(days=2),
+        train_end=_date(6),
+        validation_end=_date(7),
+        test_end=_date(8),
+        window_size=timedelta(days=2),
+        stride=timedelta(days=1),
+    )
+    data_module.setup()
+
+    snapshot = list(data_module.train_snapshots())[1]
+
+    assert snapshot.graph.nodes["transaction_id"].to_list() == ["t1", "t2", "t3"]
+    assert snapshot.target_mask is not None
+    assert snapshot.target_mask.tolist() == [False, True, True]
+    assert snapshot.edge_index.tolist() == [[0, 1], [1, 2]]
 
 
 def test_data_module_rejects_invalid_time_configuration() -> None:

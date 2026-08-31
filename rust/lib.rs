@@ -1,12 +1,10 @@
 use pyo3::prelude::*;
 
-#[pyfunction]
-fn add(a: i64, b: i64) -> i64 {
-    a + b
-}
+mod graph;
+mod tabular;
 
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(add, m)?)?;
-    Ok(())
+    graph::register(m)?;
+    tabular::register(m)
 }
