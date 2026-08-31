@@ -38,10 +38,3 @@ Tabular graph features
 .. automodule:: amlgraphx.tabular
    :members:
    :show-inheritance:
-
-Classical baselines
--------------------
-
-.. automodule:: amlgraphx.baselines
-   :members:
-   :show-inheritance:
