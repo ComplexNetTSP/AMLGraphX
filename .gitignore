@@ -232,7 +232,8 @@ __marimo__/
 /wandb/
 /mlruns/
 /logs/
-/docs/
+/docs/_build/
+/docs/_static/.jupyter_cache/
 
 # Rust / PyO3 / maturin
 target/
