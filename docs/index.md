@@ -25,7 +25,7 @@ Choose between account and transaction nodes, snapshots and event streams, and s
 :link: api/index
 :link-type: doc
 
-Browse the supported public modules for datasets, graph preparation, splitting, features, and baselines.
+Browse the supported public modules for datasets, graph preparation, splitting, features, baselines, and evaluation.
 :::
 ::::
 
@@ -35,6 +35,7 @@ Browse the supported public modules for datasets, graph preparation, splitting, 
 - Explicit account-node and transaction-node graph builders.
 - Separate static, snapshot, and continuous account-event representations.
 - Time-aware split utilities that make the evaluation protocol visible.
+- Labelled risk-score evaluation with Average Precision, ROC-AUC, and investigation-budget metrics.
 - Interoperability with Polars, PyTorch, and PyTorch Geometric.
 
 The public interface is Python-first. Implementation details are deliberately not part of the user workflow: use documented `amlgraphx` APIs rather than private modules.

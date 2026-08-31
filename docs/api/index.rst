@@ -45,3 +45,10 @@ Classical baselines
 .. automodule:: amlgraphx.baselines
    :members:
    :show-inheritance:
+
+Risk-score evaluation
+---------------------
+
+.. automodule:: amlgraphx.evaluation
+   :members:
+   :show-inheritance:

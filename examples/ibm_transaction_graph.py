@@ -1,22 +1,23 @@
-"""Prepare IBM HI-Small as transaction-node static and snapshot graphs.
+"""Prepare IBM HI-Small in all supported temporal graph modes.
 
 Run / 运行：
-    ``uv run python examples/paysim_transaction_graph.py``
+    ``uv run python examples/ibm_transaction_graph.py``
 
 The example intentionally limits the number of rows so it is suitable for a
 first API inspection. Increase ``MAX_TRANSACTIONS`` for a real experiment.
 示例故意限制读取行数，方便第一次检查 API；真实实验时可以增大
 ``MAX_TRANSACTIONS``。
 
-The static example also shows the research split protocol used by the paper:
-one complete graph plus chronological node masks. The two graph modes share
-the same canonical transaction table:
+The static example also shows one complete graph plus chronological node
+masks. All three temporal modes share the same canonical transaction table:
 
-    dataset -> canonical transactions -> transaction graph -> masks/snapshots
+    dataset -> canonical transactions -> static / snapshots / event stream
 
 ``edge_delta`` controls temporal-flow edges between transaction nodes. The
 snapshot ``bin_size`` and ``stride`` control how the already-defined graph is
-materialized over time; they are different concepts.
+materialized over time; they are different concepts. Event streams use the
+natural account-level representation because transaction-as-node event streams
+require separate node-arrival semantics and are not currently supported.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ SNAPSHOT_STRIDE = timedelta(days=1)
 
 
 def main(*, cache_dir: Path | None = None) -> None:
-    """Load IBM HI-Small and inspect transaction-node graph representations."""
+    """Load IBM HI-Small and inspect its three temporal graph modes."""
     # ``load_dataset`` downloads and prepares the adapter; the transaction
     # table itself remains lazy until a graph builder needs to materialize it.
     # ``load_dataset`` 会下载并准备 adapter；交易表在 builder 需要时才物化。
@@ -98,6 +99,20 @@ def main(*, cache_dir: Path | None = None) -> None:
             f"{snapshot.num_nodes} nodes, {snapshot.num_edges} edges, "
             f"edge_index={tuple(snapshot.edge_index.shape)}"
         )
+
+    # Mode 3: a continuous account-level stream ordered by transaction time.
+    # 模式 3：按交易时间排序的连续账户级事件流。
+    event_stream = prepare_graph(
+        transactions,
+        node_type="account",
+        temporal="event_stream",
+    )
+    print(
+        "Account event stream / 账户事件流: "
+        f"{event_stream.num_nodes} nodes, {event_stream.num_events} events"
+    )
+    print("First events / 前几个事件:")
+    print(event_stream.events.head(3))
 
 
 if __name__ == "__main__":
