@@ -1,10 +1,11 @@
 """PaySim dataset adapter."""
 
-from datetime import UTC, datetime
+from datetime import timedelta
 from pathlib import Path
 
 import polars as pl
 
+from amlgraphx.data import logical_timestamp_from_step
 from amlgraphx.data.schema import normalize_transactions
 
 from .base import (
@@ -100,11 +101,10 @@ class PaySim(Dataset):
             source_column="nameOrig",
             target_column="nameDest",
         )
-        frame = frame.with_columns(
-            (
-                pl.lit(datetime(1970, 1, 1, tzinfo=UTC))
-                + pl.duration(hours=pl.col("step").cast(pl.Int64))
-            ).alias("timestamp")
+        frame = logical_timestamp_from_step(
+            frame,
+            step_column="step",
+            step_size=timedelta(hours=1),
         )
         return normalize_transactions(
             frame,

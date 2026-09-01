@@ -24,7 +24,7 @@ class LightGBMBaseline:
             **params: Any parameter accepted by ``LGBMClassifier``.
         """
         self.use_shap = use_shap
-        params.setdefault("eval_metric", "average_precision")
+        self.eval_metric = params.pop("eval_metric", "average_precision")
         params.setdefault("verbosity", -1)
         self.estimator = LGBMClassifier(**params)
         self._booster: Booster | None = None
@@ -44,6 +44,7 @@ class LightGBMBaseline:
             fit_params["sample_weight"] = sample_weight
         if eval_set is not None:
             fit_params["eval_set"] = eval_set
+            fit_params["eval_metric"] = self.eval_metric
         self.estimator.fit(X, y, **fit_params)
         return self
 
@@ -80,12 +81,15 @@ class LightGBMBaseline:
         """Return native LightGBM parameters and the SHAP switch."""
         params = self.estimator.get_params(deep=deep)
         params["use_shap"] = self.use_shap
+        params["eval_metric"] = self.eval_metric
         return params
 
     def set_params(self, **params: Any) -> LightGBMBaseline:
         """Update native LightGBM parameters or the SHAP switch."""
         if "use_shap" in params:
             self.use_shap = bool(params.pop("use_shap"))
+        if "eval_metric" in params:
+            self.eval_metric = params.pop("eval_metric")
         self.estimator.set_params(**params)
         return self
 

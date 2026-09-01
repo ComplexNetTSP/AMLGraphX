@@ -1,5 +1,57 @@
 # AMLGraphX 当前进度
 
+## Graph-native dataset adapters and review fixes
+
+- 新增 `BankSim`、`Elliptic` 和 `EllipticPlusPlus` 数据集适配器；BankSim 保留
+  customer→merchant 交易与 raw `step`，Elliptic 系列导入数据集提供的 transaction
+  node/edge 文件，不重新推导关系。
+- 新增 `logical_timestamp_from_step()`，要求 timezone-aware origin，并以显式
+  `step_size` 生成 UTC logical timestamp；新增 `build_precomputed_transaction_graph()`。
+- BankSim 兼容公开文件的单引号 CSV；可复用风险指标同时从 `amlgraphx.metrics` 导出，
+  evaluation 路径保留兼容导出。LightGBM 在带 `eval_set` 时将默认
+  `average_precision` 传给 `fit`；GFP 示例在 raw boundary 先切分，避免 batch 泄漏。
+- 删除尚未有实现的实验、训练、采样、tracking、tuning、NN、feature 和 baseline
+  scaffold 文件；保留已有真实实现。测试覆盖上述边界和 public metrics import。
+
+## AML/Fraud binary risk-score evaluation
+
+位置：`src/amlgraphx/evaluation/`、`examples/ibm_hi_small_gfp_xgboost.py`
+
+- 新增 NumPy 评估 API：`evaluate_binary_risk_scores()` 将 Average Precision、ROC-AUC、
+  可选固定阈值的 Precision/Recall/F1 和调查预算的 Precision@K、Recall@K、F1@K、
+  Lift@K 汇总为明确的 dataclass 结果。输入必须是单一评分单位、一个已冻结且有正负类
+  标签的 split；不会在 test label 上选择阈值。
+- 新增 TSL 风格的 TorchMetrics class 层：`classification.py`、`ranking.py` 和
+  `investigation.py` 分别定义独立 metric，可按需实例化并放入训练器的 metric dict；
+  所有对象遵循 `update / compute / reset`。文档明确禁止对 batch 级排名指标取平均来
+  代替完整 split 指标。
+- `evaluation/metrics.md` 现说明各分母、无监督线上无标签的限制、图/时间泄漏要求和
+  Average Precision 与梯形 PR-AUC 的术语差异；公开 API 文档已同步。
+- 新增确定性 NumPy/Torch 测试，覆盖已知指标值、稳定 tie-break、空告警、无效输入与
+  重复预算。新增端到端示例以临时目录下载 IBM HI-Small，保留 tabular 格式、使用 GFP
+  丰富特征、训练 XGBoost；示例以独立 Torch Metric class 的 dict 按 batch `update`，
+  最后 `compute` 报告指标；退出时删除 HF cache 与解压数据。
+
+## Dataset adapters for logical steps and precomputed transaction graphs
+
+- 新增 `logical_timestamp_from_step()`：以显式 origin 和 `step_size` 将离散 step
+  映射为逻辑 datetime，同时保留原 step；PaySim 已改为复用它，BankSim 使用 daily
+  logical steps。
+- 新增 `build_precomputed_transaction_graph()`，导入 dataset 提供的 transaction
+  node 与 directed edge list，不会按账户连续性重新推导边；保留节点/边原始属性，
+  并验证 edge endpoint 均存在。
+- `Elliptic` 和 `EllipticPlusPlus` 都是 `TransactionGraphDataset`，公开
+  `transaction_nodes()`、`transaction_edges()` 和 `transaction_graph()`；后者只用
+  transaction-as-node 文件，不加载 Elliptic++ address relations。原始 Elliptic
+  无 header feature CSV 由 adapter 兼容，`class=1/2/unknown(or 3)` 变为
+  `label=1/0/null`。
+- `BankSim` 是普通 `Dataset`，其 `transactions()` 显式映射 customer→merchant、
+  amount、fraud，并保留 step 和 logical timestamp。三个 adapter 已注册到
+  `load_dataset()`。
+- 合成测试覆盖 step、预构建 edge list、未知端点和三个 adapter。真实临时下载 smoke
+  test：BankSim `4,162 / 594,643`；Elliptic 与 Elliptic++ 各为
+  `203,769 / 234,355`，并成功转换为 PyG `edge_index`。临时数据已删除。
+
 更新时间：2026-08-28
 
 ## Git 状态

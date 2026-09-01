@@ -242,7 +242,7 @@ class AccountGraph:
 
 @dataclass(frozen=True, slots=True)
 class TransactionGraph:
-    """Represent transactions as nodes linked by temporal money flow.
+    """Represent transactions as nodes linked by a directed transaction relation.
 
     English:
         For an earlier transaction ``A -> B`` and a later transaction
@@ -256,13 +256,17 @@ class TransactionGraph:
         超过 ``delta``，就从第一笔交易节点连到第二笔交易节点。时间戳相同
         的交易无法确定先后顺序，因此本实现不会把它们连接起来。
 
+    ``from_transactions`` creates temporal money-flow successor edges.  A
+    dataset may instead provide a precomputed transaction relation; construct
+    that form with ``build_precomputed_transaction_graph`` so its published
+    edge semantics remain intact.
+
     Output shape / 输出尺寸：
-        ``nodes`` is a Polars ``DataFrame`` with one row per valid transaction
-        and shape ``(N, C)``. ``edges`` has exactly four columns:
-        ``source_transaction_id``, ``target_transaction_id``, ``via_account``,
-        and ``time_delta``. Its shape is ``(E, 4)``. The number ``E`` depends on
-        account continuity, timestamp ordering, and ``delta``; it is not equal
-        to ``N`` in general.
+        ``nodes`` is a Polars ``DataFrame`` with one row per transaction and
+        shape ``(N, C)``. Every edge table has canonical
+        ``source_transaction_id`` and ``target_transaction_id`` columns. Edges
+        derived from account transfers additionally carry ``via_account`` and
+        ``time_delta``; precomputed edges retain their dataset attributes.
 
         ``nodes`` 是每笔有效交易一行、shape 为 ``(N, C)`` 的 Polars
         ``DataFrame``。``edges`` 固定包含四列：

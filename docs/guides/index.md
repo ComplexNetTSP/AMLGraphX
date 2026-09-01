@@ -99,4 +99,11 @@ scores = model.predict_proba(X_train[:, 3:])[:, 1]
 
 ## Current scope
 
-The public packages for neural models, sampling, training, tracking, tuning, and evaluation are still under active development. This documentation does not present them as production-ready APIs. Use the documented graph, data, split, tabular, and classical-baseline interfaces for the current release.
+`amlgraphx.evaluation` now provides labelled binary risk-score metrics: Average
+Precision, ROC-AUC, fixed-threshold Precision/Recall/F1, and investigation
+budget metrics such as Precision@K and Recall@K. See
+`src/amlgraphx/evaluation/metrics.md` for their exact denominators and temporal
+evaluation constraints. Torch metrics are independent ``update()`` /
+``compute()`` / ``reset()`` objects, so a training engine can receive only the
+named metrics needed for an experiment. Neural models, sampling, training,
+tracking, and tuning remain under active development.

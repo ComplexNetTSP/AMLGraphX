@@ -53,9 +53,23 @@ class Dataset(ABC):
     def download(self) -> Path:
         """Download the dataset and return its local root directory."""
 
-    @abstractmethod
     def transactions(self) -> pl.LazyFrame:
-        """Return the cleaned transactions as a lazy Polars frame."""
+        """Return raw transfer rows when this dataset provides them.
+
+        Prebuilt transaction-node datasets intentionally do not fabricate a
+        sender/receiver table; use their ``transaction_graph()`` method.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} provides a prebuilt graph, not transfer rows"
+        )
+
+
+class TransactionGraphDataset(Dataset):
+    """Dataset whose primary public representation is a transaction graph."""
+
+    @abstractmethod
+    def transaction_graph(self):
+        """Return the dataset-provided transaction-as-node graph."""
 
 
 def clean_lazy_frame(

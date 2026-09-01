@@ -18,9 +18,11 @@ dependencies = [
     "pydantic>=2.13.4",
     "scikit-learn>=1.9.0",
     "shap>=0.52.0",
+    "tensorboard>=2.21.0",
     "torch>=2.13.0",
     "torch-geometric>=2.8.0.post1",
     "torch-spatiotemporal>=0.9.5",
+    "torchmetrics>=1.9.0",
     "xgboost>=3.4.1",
 ]
 
