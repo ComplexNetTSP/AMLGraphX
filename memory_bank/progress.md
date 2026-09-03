@@ -1,5 +1,22 @@
 # AMLGraphX 当前进度
 
+## PR #8 event-state autograd fix
+
+- `EventStreamBinaryPredictor` 在训练时不再于 `training_step()` 内修改研究员模型的
+  temporal state；当前 batch 会暂存到 Lightning 完成 backward 后，再由
+  `on_after_backward()` 调用 `update_state(batch)`。验证、测试和预测阶段仍在当前
+  prediction 完成后立即更新状态。
+- 新增真实 Lightning 回归测试：模型前向读取可变 state buffer，状态 hook 原地更新
+  该 buffer；测试确保 backward 不再触发 autograd version-counter 错误，并验证每个
+  event batch 恰好更新一次。
+- event loss 日志显式使用 mask 后的事件数作为 `batch_size`，避免 Lightning 递归
+  遍历 PyG `TemporalData` 来猜测 batch size。
+- `acmart-primary/sigconf.tex` 已同步 transaction-node 因果静态图、account snapshot、
+  三类 PyG loader、特征归属和训练状态语义；删除装饰性的独立公式与花体符号，并通过
+  LaTeX Workshop 的 Tectonic recipe 生成 7 页 PDF，逐页检查无可见越界或重叠。
+
+更新时间：2026-09-03
+
 ## PyG-ready batch loaders for graph representations
 
 - 新增 `amlgraphx.data.StaticGraphWindowDataset` 和

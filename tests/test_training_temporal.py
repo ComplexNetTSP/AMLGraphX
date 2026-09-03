@@ -117,6 +117,22 @@ class _EventModel(nn.Module):
         self.calls.append("update")
 
 
+class _MutableStateEventModel(nn.Module):
+    """Event model whose state cannot be mutated before backward."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.tensor(1.0))
+        self.register_buffer("state", torch.tensor([1.0]))
+
+    def forward(self, batch: TemporalData) -> torch.Tensor:
+        return self.weight * self.state.expand(batch.t.numel())
+
+    def update_state(self, batch: TemporalData) -> None:
+        del batch
+        self.state.add_(1)
+
+
 def test_event_predictor_updates_state_after_scoring() -> None:
     """The optional state hook runs after the current event scores exist."""
     model = _EventModel()
@@ -152,3 +168,24 @@ def test_event_predictor_runs_with_temporal_dataloader(
     monkeypatch.setattr(predictor, "log", lambda *args, **kwargs: None)
 
     assert predictor.training_step(batch, 0).ndim == 0
+
+
+def test_event_predictor_defers_mutable_state_until_after_backward() -> None:
+    """State used by forward is not mutated while autograd still needs it."""
+    model = _MutableStateEventModel()
+    predictor = EventStreamBinaryPredictor(
+        model, nn.BCEWithLogitsLoss(), metrics={}, learning_rate=0.01
+    )
+    loader = TemporalDataLoader(_events(), batch_size=2)
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+    )
+
+    trainer.fit(predictor, train_dataloaders=loader)
+
+    assert model.state.item() == 3.0

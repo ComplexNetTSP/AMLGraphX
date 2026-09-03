@@ -27,10 +27,11 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
 
     If the model defines ``reset_state()``, it is called at each split or
     prediction sequence start. If it defines ``update_state(batch)``, the hook
-    is called after logits and loss inputs are computed, implementing the
-    predict-before-update convention used by stateful temporal models such as
-    JODIE and TGN. Models without either hook remain ordinary stateless PyTorch
-    modules.
+    is called after the current prediction. During training, the state update is
+    deferred until backward has finished so it cannot mutate tensors saved by
+    autograd. This implements predict-before-update semantics for stateful
+    temporal models such as JODIE and TGN. Models without either hook remain
+    ordinary stateless PyTorch modules.
 
     Args:
         model: Researcher-defined event model accepting one event batch.
@@ -72,6 +73,7 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
             "test": None,
             "predict": None,
         }
+        self._pending_train_batch: Any | None = None
 
     def forward(self, batch: Any) -> Tensor:
         """Return validated raw logits for every event in ``batch``."""
@@ -81,7 +83,15 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
     def training_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Train on one chronological event batch before updating model state."""
         del batch_idx
-        return self._event_step(batch, self.train_metrics, "train")
+        loss = self._event_step(batch, self.train_metrics, "train")
+        self._pending_train_batch = batch
+        return loss
+
+    def on_after_backward(self) -> None:
+        """Apply the training-event state transition after autograd is done."""
+        if self._pending_train_batch is not None:
+            batch, self._pending_train_batch = self._pending_train_batch, None
+            self._update_state(batch)
 
     def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Validate on one chronological event batch."""
@@ -105,6 +115,7 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
 
     def on_train_epoch_start(self) -> None:
         """Reset event order and optional model state before training."""
+        self._pending_train_batch = None
         self._start_sequence("train")
 
     def on_validation_epoch_start(self) -> None:
@@ -132,10 +143,18 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
         loss = self.loss_fn(masked_logits, masked_target)
         if not isinstance(loss, Tensor) or loss.ndim != 0:
             raise ModelContractError("loss must return a scalar torch.Tensor")
-        self.log(f"{stage}_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            f"{stage}_loss",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=masked_target.numel(),
+        )
         if len(metrics) > 0:
             metrics.update(torch.sigmoid(masked_logits), target[mask])
-        self._update_state(batch)
+        if stage != "train":
+            self._update_state(batch)
         return loss
 
     def _start_sequence(self, stage: str) -> None:
