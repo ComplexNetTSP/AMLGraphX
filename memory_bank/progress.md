@@ -1,5 +1,96 @@
 # AMLGraphX 当前进度
 
+## PR #8 event-state autograd fix
+
+- `EventStreamBinaryPredictor` 在训练时不再于 `training_step()` 内修改研究员模型的
+  temporal state；当前 batch 会暂存到 Lightning 完成 backward 后，再由
+  `on_after_backward()` 调用 `update_state(batch)`。验证、测试和预测阶段仍在当前
+  prediction 完成后立即更新状态。
+- 新增真实 Lightning 回归测试：模型前向读取可变 state buffer，状态 hook 原地更新
+  该 buffer；测试确保 backward 不再触发 autograd version-counter 错误，并验证每个
+  event batch 恰好更新一次。
+- event loss 日志显式使用 mask 后的事件数作为 `batch_size`，避免 Lightning 递归
+  遍历 PyG `TemporalData` 来猜测 batch size。
+- `acmart-primary/sigconf.tex` 已同步 transaction-node 因果静态图、account snapshot、
+  三类 PyG loader、特征归属和训练状态语义；删除装饰性的独立公式与花体符号，并通过
+  LaTeX Workshop 的 Tectonic recipe 生成 7 页 PDF，逐页检查无可见越界或重叠。
+
+更新时间：2026-09-03
+
+## PyG-ready batch loaders for graph representations
+
+- 新增 `amlgraphx.data.StaticGraphWindowDataset` 和
+  `static_graph_loader()`。二者把 time-aware static `Data` 切成目标时间不重叠
+  的局部稀疏子图，并交给原生 PyG `DataLoader` 合并为 `Batch`。交易图以
+  `node_time` 和 `target_node_mask` 为目标；账户图以 `edge_time` 和
+  `target_edge_mask` 为目标。`lookback=edge_delta` 可保留因果前驱 context。
+- 新增 `event_stream_loader()`，先验证 `TemporalData.t` 单调不减，再直接返回
+  PyG `TemporalDataLoader`，因此 event batch 始终是连续交易、不会 shuffle。
+- 新增 `SnapshotWindowDataset`、`SnapshotDataLoader`、`SnapshotBatch`。一个样本
+  是 `(G[t-k], ..., G[t-1]) -> G[t]`；collate 时同一时间位置的多个 `Data` 用
+  `Batch.from_data_list` 合并为不连通图，`context` tuple 保留时间轴，`target`
+  保留当前快照的交易边标签。非张量的 snapshot 时间元数据被排除，避免 PyG 对
+  `snapshot_index` 的默认 index 偏移规则造成错误。
+- `to_pyg_data(TransactionGraph)` 现在额外输出 `node_time`，使交易静态图可以
+  直接被 window loader 采样。账户事件流保持 PyG `TemporalData` 的原生字段约束：
+  不写入 Python `int` 型 `num_nodes`，以确保 `TemporalDataLoader` 能切片。单元测试
+  覆盖三类 loader、因果 lookback、edge/node target mask、PyG index 偏移、事件切片
+  和时间逆序拒绝。
+
+更新时间：2026-09-03
+
+## Graph semantics and model-ready feature facade
+
+- 收敛高级图模式语义：`account-as-node` 支持 time-aware static、snapshot 和
+  event stream；`transaction-as-node` 的高级 API 只支持 causal time-aware static。
+  原有 transaction window helper 作为大图 batching 的低级兼容工具保留，不再描述为
+  稳定节点的 snapshot evolution。transaction-node event stream 在明确 node-arrival
+  和孤立交易语义之前继续拒绝。
+- 新增 `GraphFeatureSpec` 和 `prepare_pyg_graph()`。用户通过一次高级调用声明节点特征、
+  边特征和标签：账户图自动生成 account `x`、transaction `edge_attr/edge_y`；交易图
+  自动生成 transaction `x/node_y` 和 relation `edge_attr`；账户事件流将交易特征放入
+  `msg/y`，并可将账户元数据放入 `x`。
+- `prepare_graph()` 现在把 source、target、timestamp、transaction ID 和 account ID
+  字段覆盖继续传给底层 builder；`to_pyg_temporal_data()` 支持账户节点特征并显式保留
+  `num_nodes`，包括没有事件的账户。
+- 合成测试覆盖 transaction 非静态模式拒绝、高级 API 的标签归属、账户 snapshot
+  edge targets、event-stream 节点/消息特征和错误的特征选择。
+- 完整真实数据验证（`edge_delta=1 hour`）：IBM HI-Small transaction static 为
+  `5,078,345 / 2,176,494` 节点/边、account event stream 为
+  `515,080 / 5,078,345` 节点/事件；IBM LI-Small 分别为
+  `6,924,049 / 3,882,235` 和 `705,903 / 6,924,049`。两者的 PyG 节点、边/消息及
+  标签 shape 均与图实体数量一致，下载和解压只使用临时目录。
+- 自动化验证：`113 passed`；Ruff lint、`src tests examples docs` format check、
+  Sphinx warnings-as-errors 构建、`uv lock --check` 和 `git diff --check` 均通过。
+
+更新时间：2026-09-03
+
+## Static binary node training predictor
+
+- 新增 `amlgraphx.training.StaticBinaryNodePredictor`，基于 PyTorch Lightning
+  编排研究员自定义的 PyTorch 模型；模型接收 PyG-style batch，返回每个节点的
+  binary logits，默认读取 `node_y` 和 `train_mask`/`validation_mask`/`test_mask`。
+- 训练、验证和测试只在对应 mask 上计算 loss；TorchMetrics 在完整 split 上累计，
+  `predict_step()` 返回所有节点的 sigmoid risk score；支持 optimizer、scheduler
+  factory 与清晰的输出/标签/mask contract errors。
+- 新增静态训练 smoke/contract tests；`pytorch-lightning` 改为直接项目依赖。
+- 当前限制：只覆盖 time-aware static 图的 binary node classification；sklearn 风格
+  facade、统一 checkpoint policy 和 MLflow 尚未实现。
+
+## Snapshot and event-stream training predictors
+
+- 新增 `amlgraphx.training.SnapshotBinaryNodePredictor`：按 snapshot loader 的
+  时间顺序处理节点图，使用可选 `target_mask` 排除 lookback/context 节点；可通过
+  `snapshot_index` 检查顺序，并在每个 split sequence 开始调用模型的可选
+  `reset_state()`。
+- 新增 `amlgraphx.training.EventStreamBinaryPredictor`：面向 PyG
+  `TemporalData` 风格的 `src`/`dst`/`t`/`msg`/`y`，拒绝批内和批间时间倒退；在
+  计算当前事件 logits 与 loss 后调用模型的可选 `update_state(batch)`，保持
+  predict-before-update 语义。
+- 两类 predictor 复用 static predictor 的 optimizer、scheduler、TorchMetrics 和
+  输出 contract；新增 snapshot/event 顺序、mask、state hook、TemporalDataLoader
+  及 Lightning smoke tests。当前仍不实现任何具体 GNN、TGN 或 JODIE 模型。
+
 ## Graph-native dataset adapters and review fixes
 
 - 新增 `BankSim`、`Elliptic` 和 `EllipticPlusPlus` 数据集适配器；BankSim 保留

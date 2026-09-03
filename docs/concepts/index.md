@@ -32,13 +32,16 @@ An account graph retains every input transaction as an edge, including repeated 
 
 Time-aware graph construction and temporal data representation are distinct choices.
 
-| Mode | Output | Use when |
+| Mode | Account-as-node | Transaction-as-node |
 | --- | --- | --- |
-| `static` | One graph, possibly built with timestamps | A static graph model needs time-aware edges but no sequence. |
-| `snapshot` | Iterator of graph windows | A model consumes discrete graph states. |
-| `event_stream` | Ordered account-to-account events | A continuous-time model consumes source, destination, time, and messages. |
+| `static` | Supported: transactions are time-aware edges. | Supported: time constrains directed transaction relations. |
+| `snapshot` | Supported: stable accounts recur across graph states. | Not a high-level mode; windows are only a batching utility. |
+| `event_stream` | Supported: each transaction is one account-to-account event. | Not implemented; it requires node-arrival and isolated-transaction semantics. |
 
-Snapshot windows use `[start_time, end_time)` semantics. Equal `bin_size` and `stride` values create disjoint windows; a smaller stride creates overlap. Account event streams preserve one event per transaction and are stably ordered by time. Transaction-node event streams are intentionally unavailable because they require an explicit node-arrival definition.
+Account snapshot windows use `[start_time, end_time)` semantics. Equal
+`bin_size` and `stride` values create disjoint windows; a smaller stride creates
+overlap. Account event streams preserve one event per transaction and are
+stably ordered by time.
 
 ## Temporal evaluation and leakage
 
@@ -53,4 +56,39 @@ The intervals are `[-∞, train_end)`, `[train_end, validation_end)`, and `[vali
 
 ## From tables to model inputs
 
-AMLGraphX graph objects retain Polars tables with stable IDs and original features. `to_pyg_data()` and `to_pyg_temporal_data()` convert explicitly selected numerical columns to standard PyTorch Geometric objects. Categorical encoding, normalization, target masks, and model selection remain explicit research decisions.
+AMLGraphX graph objects retain Polars tables with stable IDs and original
+features. `GraphFeatureSpec` and `prepare_pyg_graph()` provide the model-ready
+high-level path:
+
+| Representation | Node features and labels | Edge features and labels |
+| --- | --- | --- |
+| Account graph | Account metadata | Transaction attributes and transaction label |
+| Transaction graph | Transaction attributes and transaction label | Relation attributes such as `time_delta` |
+| Account event stream | Account metadata | Transaction attributes become `msg`; label becomes `y` |
+
+The lower-level `to_pyg_data()` and `to_pyg_temporal_data()` functions remain
+available when a prepared graph needs custom conversion. Only explicitly
+selected numerical columns are converted. Categorical encoding, normalization,
+target masks, and model selection remain explicit research decisions.
+
+## Training batches
+
+Batching preserves the selected temporal representation instead of converting
+all data into one generic sequence. A bounded static graph window is an
+ordinary PyG `Batch`: each window is a disconnected component and has either a
+`target_node_mask` (transaction graph) or `target_edge_mask` (account graph).
+An account event stream uses PyG's chronological `TemporalDataLoader`.
+
+An account snapshot batch has one PyG `Batch` at each time position:
+
+```text
+context[0] = Batch(Ga[t-5], Gb[t-5], ...)
+...
+context[4] = Batch(Ga[t-1], Gb[t-1], ...)
+target     = Batch(Ga[t],   Gb[t],   ...)
+```
+
+The graph components at a single time position execute in parallel. The tuple
+keeps the time axis explicit for a researcher-defined temporal model. Static
+windows can be shuffled when the model has no cross-window state; event streams
+and stateful snapshot models must remain chronological.

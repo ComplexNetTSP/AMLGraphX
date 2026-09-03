@@ -17,19 +17,21 @@ returns an iterator of snapshots. / 本 API 不创建含义模糊的万能
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import polars as pl
+from torch_geometric.data import Data, TemporalData
 
 from .builders.account import (
     AccountGraph,
     build_time_aware_account_graph,
 )
 from .builders.transaction import TransactionGraph, build_transaction_graph
+from .pyg import to_pyg_data, to_pyg_temporal_data
 from .temporal.event_stream import AccountEventStream
 
 if TYPE_CHECKING:
@@ -39,6 +41,7 @@ type TransactionTable = pl.DataFrame | pl.LazyFrame
 type GraphBuildResult = (
     AccountGraph | TransactionGraph | AccountEventStream | Iterator["GraphSnapshot"]
 )
+type PyGGraphBuildResult = Data | TemporalData | Iterator[Data]
 
 
 class GraphNodeType(StrEnum):
@@ -57,6 +60,36 @@ class GraphTemporalMode(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class GraphFeatureSpec:
+    """Select model features without changing their graph semantics.
+
+    Account graphs store account attributes on nodes and transaction attributes
+    on edges. Transaction graphs store transaction attributes on nodes and
+    relation attributes, such as ``time_delta``, on edges. ``label_column`` is
+    therefore mapped automatically to ``edge_y`` for account-node graphs and
+    to ``node_y`` for transaction-node graphs.
+
+    Only numerical columns can be converted directly. Encode categorical
+    columns before graph preparation or keep using the Polars graph tables.
+    """
+
+    node_columns: Sequence[str] = ()
+    edge_columns: Sequence[str] = ()
+    label_column: str | None = None
+
+    def __post_init__(self) -> None:
+        """Freeze feature selections as tuples and reject invalid names."""
+        node_columns = _feature_columns(self.node_columns, "node_columns")
+        edge_columns = _feature_columns(self.edge_columns, "edge_columns")
+        if self.label_column is not None and not isinstance(self.label_column, str):
+            raise TypeError("label_column must be a string or None")
+        if self.label_column == "":
+            raise ValueError("label_column must not be empty")
+        object.__setattr__(self, "node_columns", node_columns)
+        object.__setattr__(self, "edge_columns", edge_columns)
+
+
+@dataclass(frozen=True, slots=True)
 class GraphBuildSpec:
     """Describe one reproducible graph preparation choice.
 
@@ -70,9 +103,12 @@ class GraphBuildSpec:
         时间感知图还是 snapshot 序列。``edge_delta`` 只控制交易流边，
         ``bin_size`` 与 ``stride`` 只控制 snapshot，三者不能混用。
 
-    Account graphs support all three modes. Transaction graphs support static
-    and snapshot modes; a transaction-node event stream would require separate
-    node-arrival semantics and is therefore rejected explicitly.
+    Account graphs support all three modes because accounts have stable identity
+    and each transaction is naturally an edge event. Transaction-as-node is a
+    causal static graph: separate time windows may still be used for batching,
+    but they are not a snapshot evolution of stable transaction nodes. A
+    transaction-node stream would additionally require explicit node-arrival
+    semantics and is not implemented.
     """
 
     node_type: GraphNodeType | str
@@ -103,14 +139,17 @@ class GraphBuildSpec:
             raise ValueError("snapshot preparation requires both bin_size and stride")
         if (
             self.node_type is GraphNodeType.TRANSACTION
-            and self.temporal is GraphTemporalMode.EVENT_STREAM
+            and self.temporal is not GraphTemporalMode.STATIC
         ):
             raise NotImplementedError(
-                "transaction-as-node event streams require explicit node-arrival "
-                "semantics and are not supported"
+                "transaction-as-node supports temporal='static'; transaction "
+                "windows are a batching strategy, and event streams require "
+                "explicit node-arrival semantics"
             )
         if self.node_type is GraphNodeType.TRANSACTION and self.edge_delta is None:
             raise ValueError("transaction graphs require edge_delta")
+        if self.node_type is GraphNodeType.ACCOUNT and self.edge_delta is not None:
+            raise ValueError("edge_delta applies only to transaction-node graphs")
 
 
 def prepare_graph(
@@ -125,7 +164,11 @@ def prepare_graph(
     end_time: datetime | None = None,
     drop_last: bool = True,
     account_metadata: TransactionTable | None = None,
+    source_column: str | None = None,
+    target_column: str | None = None,
     timestamp_column: str | None = None,
+    transaction_id_column: str | None = None,
+    account_id_column: str | None = None,
 ) -> GraphBuildResult:
     """Prepare a graph using explicit node and temporal semantics.
 
@@ -134,9 +177,9 @@ def prepare_graph(
     ``prepare_graph(tx, node_type="transaction", temporal="static",\
     edge_delta=timedelta(hours=1))`` returns a ``TransactionGraph``.
 
-    ``prepare_graph(tx, node_type="transaction", temporal="snapshot",\
-    edge_delta=timedelta(hours=1), bin_size=timedelta(days=1),\
-    stride=timedelta(days=1))`` returns an iterator of ``GraphSnapshot``.
+    ``prepare_graph(tx, node_type="account", temporal="snapshot",\
+    bin_size=timedelta(days=1), stride=timedelta(days=1))`` returns an iterator
+    of account snapshots with stable account identities.
 
     The function is intentionally a thin dispatcher. It does not perform
     dataset loading, train/validation/test splitting, or backend conversion.
@@ -148,7 +191,8 @@ def prepare_graph(
     streams preserve the same rows as time-ordered events.
 
     Raises:
-        NotImplementedError: If transaction-as-node event stream is requested.
+        NotImplementedError: If transaction-as-node snapshot or event stream is
+            requested.
         ValueError: If the requested combination is incomplete or invalid.
     """
     spec = GraphBuildSpec(
@@ -166,7 +210,11 @@ def prepare_graph(
         graph = build_time_aware_account_graph(
             transactions,
             account_metadata=account_metadata,
+            source_column=source_column,
+            target_column=target_column,
             timestamp_column=timestamp_column,
+            transaction_id_column=transaction_id_column,
+            account_id_column=account_id_column,
         )
         if spec.temporal is GraphTemporalMode.STATIC:
             return graph
@@ -187,27 +235,134 @@ def prepare_graph(
     graph = build_transaction_graph(
         transactions,
         delta=spec.edge_delta,  # type: ignore[arg-type]
+        source_column=source_column,
+        target_column=target_column,
         timestamp_column=timestamp_column,
+        transaction_id_column=transaction_id_column,
     )
-    if spec.temporal is GraphTemporalMode.STATIC:
-        return graph
+    return graph
 
-    from .temporal.snapshot import build_transaction_snapshots
 
-    return build_transaction_snapshots(
+def prepare_pyg_graph(
+    transactions: TransactionTable,
+    *,
+    node_type: GraphNodeType | str,
+    temporal: GraphTemporalMode | str,
+    features: GraphFeatureSpec | None = None,
+    edge_delta: timedelta | None = None,
+    bin_size: timedelta | None = None,
+    stride: timedelta | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    drop_last: bool = True,
+    account_metadata: TransactionTable | None = None,
+    source_column: str | None = None,
+    target_column: str | None = None,
+    timestamp_column: str | None = None,
+    transaction_id_column: str | None = None,
+    account_id_column: str | None = None,
+) -> PyGGraphBuildResult:
+    """Build a model-ready PyG representation through one high-level call.
+
+    Feature placement follows node semantics. For account-node graphs,
+    ``features.node_columns`` selects account metadata, ``edge_columns`` selects
+    transaction attributes, and the label becomes ``edge_y``. For
+    transaction-node graphs, transaction attributes and labels become ``x``
+    and ``node_y`` while relation attributes such as ``time_delta`` become
+    ``edge_attr``. In account event streams, edge features become ``msg``.
+
+    Returns:
+        ``Data`` for static graphs, an iterator of ``Data`` for account
+        snapshots, or ``TemporalData`` for account event streams.
+    """
+    if features is not None and not isinstance(features, GraphFeatureSpec):
+        raise TypeError("features must be a GraphFeatureSpec or None")
+    feature_spec = features or GraphFeatureSpec()
+    graph = prepare_graph(
+        transactions,
+        node_type=node_type,
+        temporal=temporal,
+        edge_delta=edge_delta,
+        bin_size=bin_size,
+        stride=stride,
+        start_time=start_time,
+        end_time=end_time,
+        drop_last=drop_last,
+        account_metadata=account_metadata,
+        source_column=source_column,
+        target_column=target_column,
+        timestamp_column=timestamp_column,
+        transaction_id_column=transaction_id_column,
+        account_id_column=account_id_column,
+    )
+
+    if isinstance(graph, AccountEventStream):
+        return to_pyg_temporal_data(
+            graph,
+            node_feature_columns=feature_spec.node_columns,
+            message_columns=feature_spec.edge_columns,
+            label_column=feature_spec.label_column,
+        )
+    if isinstance(graph, AccountGraph):
+        return _graph_to_pyg(graph, feature_spec)
+    if isinstance(graph, TransactionGraph):
+        return _graph_to_pyg(graph, feature_spec)
+    return _account_snapshots_to_pyg(graph, feature_spec)
+
+
+def _graph_to_pyg(
+    graph: AccountGraph | TransactionGraph,
+    features: GraphFeatureSpec,
+) -> Data:
+    """Convert one graph and place its label on the prediction entity."""
+    label_arguments: dict[str, str] = {}
+    if features.label_column is not None:
+        label_key = (
+            "edge_label_column"
+            if isinstance(graph, AccountGraph)
+            else "node_label_column"
+        )
+        label_arguments[label_key] = features.label_column
+    return to_pyg_data(
         graph,
-        bin_size=spec.bin_size,  # type: ignore[arg-type]
-        stride=spec.stride,  # type: ignore[arg-type]
-        start_time=spec.start_time,
-        end_time=spec.end_time,
-        drop_last=spec.drop_last,
+        node_feature_columns=features.node_columns,
+        edge_feature_columns=features.edge_columns,
+        **label_arguments,
     )
+
+
+def _account_snapshots_to_pyg(
+    snapshots: Iterator[GraphSnapshot],
+    features: GraphFeatureSpec,
+) -> Iterator[Data]:
+    """Convert account snapshots lazily while preserving their time metadata."""
+    for snapshot in snapshots:
+        if not isinstance(snapshot.graph, AccountGraph):
+            raise TypeError("high-level snapshots must contain account-node graphs")
+        data = _graph_to_pyg(snapshot.graph, features)
+        data.snapshot_index = snapshot.index
+        data.start_time = snapshot.start_time
+        data.end_time = snapshot.end_time
+        yield data
+
+
+def _feature_columns(columns: Sequence[str], name: str) -> tuple[str, ...]:
+    """Normalize a user feature selection into a validated immutable tuple."""
+    if isinstance(columns, str):
+        raise TypeError(f"{name} must be a sequence of column names, not a string")
+    normalized = tuple(columns)
+    if any(not isinstance(column, str) or not column for column in normalized):
+        raise ValueError(f"{name} must contain non-empty strings")
+    return normalized
 
 
 __all__ = [
     "GraphBuildResult",
     "GraphBuildSpec",
+    "GraphFeatureSpec",
     "GraphNodeType",
     "GraphTemporalMode",
+    "PyGGraphBuildResult",
     "prepare_graph",
+    "prepare_pyg_graph",
 ]

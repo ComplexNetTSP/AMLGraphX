@@ -65,6 +65,10 @@ def to_pyg_data(
     )
     # Explicit node count preserves isolated nodes even when x is omitted.
     data.num_nodes = graph.num_nodes
+    if isinstance(graph, TransactionGraph):
+        # A transaction graph is node-temporal. Static-window loaders use this
+        # tensor to retain only the configured causal history for each target.
+        data.node_time = _time_tensor(graph.nodes["timestamp"])
     if node_label_column is not None:
         data.node_y = _label_tensor(graph.nodes, node_label_column)
     if edge_label_column is not None:
@@ -76,14 +80,19 @@ def to_pyg_data(
 def to_pyg_temporal_data(
     stream: AccountEventStream,
     *,
+    node_feature_columns: Sequence[str] = (),
     message_columns: Sequence[str] = (),
     label_column: str | None = None,
 ) -> TemporalData:
     """Convert an account event stream to PyG ``TemporalData``.
 
+    ``node_feature_columns`` selects numerical account metadata for ``x``.
     ``message_columns`` selects numerical transaction edge features for
-    ``msg``. An empty selection produces an ``[num_events, 0]`` float matrix,
-    allowing models to add their own message encoder later.
+    ``msg``. An empty message selection produces an ``[num_events, 0]`` float
+    matrix, allowing models to add their own message encoder later. PyG's
+    ``TemporalData`` derives ``num_nodes`` from event endpoints, so AMLGraphX
+    does not assign it as a Python integer: that would break PyG's event
+    slicing. Account metadata in ``x`` can still contain isolated accounts.
     """
     if not isinstance(stream, AccountEventStream):
         raise TypeError("stream must be an AccountEventStream")
@@ -96,19 +105,25 @@ def to_pyg_temporal_data(
         target_column="target",
     )
     message = _feature_tensor(stream.events, message_columns, "message_columns")
+    node_features = _feature_tensor(
+        stream.nodes, node_feature_columns, "node_feature_columns"
+    )
     if message is None:
         message = torch.empty((stream.num_events, 0), dtype=torch.float32)
 
     kwargs: dict[str, Tensor] = {}
     if label_column is not None:
         kwargs["y"] = _label_tensor(stream.events, label_column)
-    return TemporalData(
+    data = TemporalData(
         src=torch.tensor(indexed["source_index"].to_numpy(), dtype=torch.long),
         dst=torch.tensor(indexed["target_index"].to_numpy(), dtype=torch.long),
         t=_time_tensor(stream.events["timestamp"]),
         msg=message,
         **kwargs,
     )
+    if node_features is not None:
+        data.x = node_features
+    return data
 
 
 def _validate_graph_type(graph: HomogeneousGraph) -> None:

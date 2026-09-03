@@ -6,12 +6,15 @@ import polars as pl
 import pytest
 import torch
 from torch_geometric.data import Batch, Data, TemporalData
+from torch_geometric.loader import TemporalDataLoader
 
 from amlgraphx.graph import (
     AccountEventStream,
     AccountGraph,
+    GraphFeatureSpec,
     TransactionGraph,
     prepare_graph,
+    prepare_pyg_graph,
     to_pyg_data,
     to_pyg_temporal_data,
 )
@@ -109,6 +112,19 @@ def test_account_event_stream_is_ordered_and_keeps_messages() -> None:
         )
 
 
+def test_transaction_nodes_only_support_static_high_level_mode() -> None:
+    """Transaction windows remain batching utilities, not snapshot evolution."""
+    with pytest.raises(NotImplementedError, match="batching strategy"):
+        prepare_graph(
+            _account_transactions(),
+            node_type="transaction",
+            temporal="snapshot",
+            edge_delta=timedelta(days=1),
+            bin_size=timedelta(days=1),
+            stride=timedelta(days=1),
+        )
+
+
 def test_both_node_types_convert_to_standard_pyg_data() -> None:
     """Account and transaction semantics share one standard PyG Data output."""
     account_graph = prepare_graph(
@@ -192,6 +208,102 @@ def test_account_stream_converts_to_standard_temporal_data() -> None:
     assert events.msg[:, 0].tolist() == [10.0, 20.0, 30.0]
     assert events.y.tolist() == [1, 0, 0]
     assert torch.all(events.t[:-1] <= events.t[1:])
+    assert next(iter(TemporalDataLoader(events, batch_size=2))).y.tolist() == [1, 0]
+
+
+def test_high_level_pyg_api_places_features_and_labels_by_node_type() -> None:
+    """One facade maps transaction labels to the modeled prediction entity."""
+    account_data = prepare_pyg_graph(
+        _account_transactions(),
+        node_type="account",
+        temporal="static",
+        account_metadata=_account_metadata(),
+        features=GraphFeatureSpec(
+            node_columns=("balance",),
+            edge_columns=("amount",),
+            label_column="label",
+        ),
+    )
+    transaction_data = prepare_pyg_graph(
+        _account_transactions(),
+        node_type="transaction",
+        temporal="static",
+        edge_delta=timedelta(days=2),
+        features=GraphFeatureSpec(
+            node_columns=("amount",),
+            edge_columns=("time_delta",),
+            label_column="label",
+        ),
+    )
+
+    assert type(account_data) is Data
+    assert account_data.x.shape == (3, 1)
+    assert account_data.edge_attr.shape == (3, 1)
+    assert account_data.edge_y.tolist() == [0, 1, 0]
+    assert "node_y" not in account_data
+
+    assert type(transaction_data) is Data
+    assert transaction_data.x.shape == (3, 1)
+    assert transaction_data.edge_attr.shape == (2, 1)
+    assert transaction_data.node_y.tolist() == [0, 1, 0]
+    assert "edge_y" not in transaction_data
+
+
+def test_high_level_pyg_event_stream_keeps_account_features() -> None:
+    """Account metadata becomes x and transaction attributes become messages."""
+    events = prepare_pyg_graph(
+        _account_transactions(),
+        node_type="account",
+        temporal="event_stream",
+        account_metadata=_account_metadata(),
+        features=GraphFeatureSpec(
+            node_columns=("balance",),
+            edge_columns=("amount",),
+            label_column="label",
+        ),
+    )
+
+    assert type(events) is TemporalData
+    assert events.x[:, 0].tolist() == [100.0, 200.0, 300.0]
+    assert events.msg[:, 0].tolist() == [10.0, 20.0, 30.0]
+    assert events.y.tolist() == [1, 0, 0]
+    assert events.num_nodes == 3
+
+
+def test_high_level_pyg_account_snapshots_keep_edge_targets() -> None:
+    """Account snapshots remain edge-classification batches with stable IDs."""
+    snapshots = list(
+        prepare_pyg_graph(
+            _account_transactions(),
+            node_type="account",
+            temporal="snapshot",
+            account_metadata=_account_metadata(),
+            features=GraphFeatureSpec(
+                node_columns=("balance",),
+                edge_columns=("amount",),
+                label_column="label",
+            ),
+            bin_size=timedelta(days=2),
+            stride=timedelta(days=2),
+            start_time=_time(1),
+            end_time=_time(4),
+            drop_last=False,
+        )
+    )
+
+    assert len(snapshots) == 2
+    assert snapshots[0].snapshot_index == 1
+    assert snapshots[0].x.shape == (2, 1)
+    assert snapshots[0].edge_attr[:, 0].tolist() == [20.0, 10.0]
+    assert snapshots[0].edge_y.tolist() == [0, 1]
+
+
+def test_feature_spec_rejects_ambiguous_string_selection() -> None:
+    """A single column still needs an explicit one-item sequence."""
+    with pytest.raises(TypeError, match="sequence"):
+        GraphFeatureSpec(node_columns="amount")
+    with pytest.raises(TypeError, match="label_column"):
+        GraphFeatureSpec(label_column=1)
 
 
 def test_pyg_conversion_rejects_unencoded_categorical_features() -> None:
