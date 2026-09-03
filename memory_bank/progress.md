@@ -1,5 +1,27 @@
 # AMLGraphX 当前进度
 
+## PyG-ready batch loaders for graph representations
+
+- 新增 `amlgraphx.data.StaticGraphWindowDataset` 和
+  `static_graph_loader()`。二者把 time-aware static `Data` 切成目标时间不重叠
+  的局部稀疏子图，并交给原生 PyG `DataLoader` 合并为 `Batch`。交易图以
+  `node_time` 和 `target_node_mask` 为目标；账户图以 `edge_time` 和
+  `target_edge_mask` 为目标。`lookback=edge_delta` 可保留因果前驱 context。
+- 新增 `event_stream_loader()`，先验证 `TemporalData.t` 单调不减，再直接返回
+  PyG `TemporalDataLoader`，因此 event batch 始终是连续交易、不会 shuffle。
+- 新增 `SnapshotWindowDataset`、`SnapshotDataLoader`、`SnapshotBatch`。一个样本
+  是 `(G[t-k], ..., G[t-1]) -> G[t]`；collate 时同一时间位置的多个 `Data` 用
+  `Batch.from_data_list` 合并为不连通图，`context` tuple 保留时间轴，`target`
+  保留当前快照的交易边标签。非张量的 snapshot 时间元数据被排除，避免 PyG 对
+  `snapshot_index` 的默认 index 偏移规则造成错误。
+- `to_pyg_data(TransactionGraph)` 现在额外输出 `node_time`，使交易静态图可以
+  直接被 window loader 采样。账户事件流保持 PyG `TemporalData` 的原生字段约束：
+  不写入 Python `int` 型 `num_nodes`，以确保 `TemporalDataLoader` 能切片。单元测试
+  覆盖三类 loader、因果 lookback、edge/node target mask、PyG index 偏移、事件切片
+  和时间逆序拒绝。
+
+更新时间：2026-09-03
+
 ## Graph semantics and model-ready feature facade
 
 - 收敛高级图模式语义：`account-as-node` 支持 time-aware static、snapshot 和

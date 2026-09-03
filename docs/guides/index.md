@@ -96,6 +96,71 @@ columns are converted directly. Encode categories and fit normalizers using the
 training period only; AMLGraphX does not make those potentially leaky decisions
 on your behalf.
 
+## Batch graph inputs without changing their time semantics
+
+AMLGraphX batches only after a graph representation has been chosen. The
+returned objects remain standard PyG batches, so a researcher model can accept
+them directly.
+
+For a large time-aware static transaction graph, use disjoint target windows.
+Set ``lookback`` to the causal edge ``delta`` so that each target transaction
+retains its permitted predecessor context. The target windows do not overlap;
+only their historical context may overlap.
+
+```python
+from datetime import timedelta
+
+from amlgraphx.data import static_graph_loader
+
+loader = static_graph_loader(
+    transaction_data,
+    window_size=timedelta(days=1),
+    lookback=timedelta(hours=4),
+    batch_size=8,
+    shuffle=True,
+)
+
+for batch in loader:
+    # batch is a standard PyG Batch.
+    logits = model(batch)
+    loss = loss_fn(logits[batch.target_node_mask], batch.node_y[batch.target_node_mask])
+```
+
+The same loader works for an account static graph. It selects transaction edges
+instead and creates ``target_edge_mask``; the model therefore scores current
+transaction edges rather than account nodes.
+
+For an account event stream, use the small AMLGraphX wrapper around PyG's own
+chronological loader. It returns consecutive ``TemporalData`` batches and does
+not shuffle events:
+
+```python
+from amlgraphx.data import event_stream_loader
+
+loader = event_stream_loader(events, batch_size=1024)
+for event_batch in loader:
+    logits = model(event_batch)
+```
+
+For account snapshots, a sample is a full context/target window. The loader
+batches each time position independently with ``Batch.from_data_list``:
+
+```python
+from amlgraphx.data import SnapshotDataLoader, SnapshotWindowDataset
+
+dataset = SnapshotWindowDataset(snapshots, context_size=5)
+loader = SnapshotDataLoader(dataset, batch_size=8, shuffle=True)
+
+for batch in loader:
+    # batch.context contains five PyG Batch objects in temporal order.
+    # batch.target is the sixth/current PyG Batch with edge_y.
+    logits = model(batch.context, batch.target)
+```
+
+This is appropriate for models with no state between windows. A model that
+keeps state across calls must use ``shuffle=False`` and define its reset policy
+at split boundaries.
+
 ## Enrich tabular features from transaction history
 
 `GraphFeaturePreprocessor` accepts a numeric matrix whose first four columns are `[edge_id, source_id, target_id, timestamp]`; later columns are numeric transaction features. It appends graph-derived features suitable for a tabular estimator.

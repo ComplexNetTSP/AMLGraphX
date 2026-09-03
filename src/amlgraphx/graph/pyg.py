@@ -65,6 +65,10 @@ def to_pyg_data(
     )
     # Explicit node count preserves isolated nodes even when x is omitted.
     data.num_nodes = graph.num_nodes
+    if isinstance(graph, TransactionGraph):
+        # A transaction graph is node-temporal. Static-window loaders use this
+        # tensor to retain only the configured causal history for each target.
+        data.node_time = _time_tensor(graph.nodes["timestamp"])
     if node_label_column is not None:
         data.node_y = _label_tensor(graph.nodes, node_label_column)
     if edge_label_column is not None:
@@ -85,7 +89,10 @@ def to_pyg_temporal_data(
     ``node_feature_columns`` selects numerical account metadata for ``x``.
     ``message_columns`` selects numerical transaction edge features for
     ``msg``. An empty message selection produces an ``[num_events, 0]`` float
-    matrix, allowing models to add their own message encoder later.
+    matrix, allowing models to add their own message encoder later. PyG's
+    ``TemporalData`` derives ``num_nodes`` from event endpoints, so AMLGraphX
+    does not assign it as a Python integer: that would break PyG's event
+    slicing. Account metadata in ``x`` can still contain isolated accounts.
     """
     if not isinstance(stream, AccountEventStream):
         raise TypeError("stream must be an AccountEventStream")
@@ -114,7 +121,6 @@ def to_pyg_temporal_data(
         msg=message,
         **kwargs,
     )
-    data.num_nodes = stream.num_nodes
     if node_features is not None:
         data.x = node_features
     return data

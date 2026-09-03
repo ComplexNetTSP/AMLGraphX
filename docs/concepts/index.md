@@ -70,3 +70,25 @@ The lower-level `to_pyg_data()` and `to_pyg_temporal_data()` functions remain
 available when a prepared graph needs custom conversion. Only explicitly
 selected numerical columns are converted. Categorical encoding, normalization,
 target masks, and model selection remain explicit research decisions.
+
+## Training batches
+
+Batching preserves the selected temporal representation instead of converting
+all data into one generic sequence. A bounded static graph window is an
+ordinary PyG `Batch`: each window is a disconnected component and has either a
+`target_node_mask` (transaction graph) or `target_edge_mask` (account graph).
+An account event stream uses PyG's chronological `TemporalDataLoader`.
+
+An account snapshot batch has one PyG `Batch` at each time position:
+
+```text
+context[0] = Batch(Ga[t-5], Gb[t-5], ...)
+...
+context[4] = Batch(Ga[t-1], Gb[t-1], ...)
+target     = Batch(Ga[t],   Gb[t],   ...)
+```
+
+The graph components at a single time position execute in parallel. The tuple
+keeps the time axis explicit for a researcher-defined temporal model. Static
+windows can be shuffled when the model has no cross-window state; event streams
+and stateful snapshot models must remain chronological.

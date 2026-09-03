@@ -6,6 +6,7 @@ import polars as pl
 import pytest
 import torch
 from torch_geometric.data import Batch, Data, TemporalData
+from torch_geometric.loader import TemporalDataLoader
 
 from amlgraphx.graph import (
     AccountEventStream,
@@ -207,6 +208,7 @@ def test_account_stream_converts_to_standard_temporal_data() -> None:
     assert events.msg[:, 0].tolist() == [10.0, 20.0, 30.0]
     assert events.y.tolist() == [1, 0, 0]
     assert torch.all(events.t[:-1] <= events.t[1:])
+    assert next(iter(TemporalDataLoader(events, batch_size=2))).y.tolist() == [1, 0]
 
 
 def test_high_level_pyg_api_places_features_and_labels_by_node_type() -> None:
