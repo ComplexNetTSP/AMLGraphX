@@ -1,4 +1,4 @@
-"""Prepare IBM HI-Small in all supported temporal graph modes.
+"""Prepare IBM HI-Small with explicit account and transaction semantics.
 
 Run / 运行：
     ``uv run python examples/ibm_transaction_graph.py``
@@ -8,36 +8,34 @@ first API inspection. Increase ``MAX_TRANSACTIONS`` for a real experiment.
 示例故意限制读取行数，方便第一次检查 API；真实实验时可以增大
 ``MAX_TRANSACTIONS``。
 
-The static example also shows one complete graph plus chronological node
-masks. All three temporal modes share the same canonical transaction table:
+The static transaction-node example shows one complete graph plus
+chronological node masks. Account-node graphs additionally support snapshots
+and event streams because account identities persist over time:
 
-    dataset -> canonical transactions -> static / snapshots / event stream
+    account nodes -> static / snapshots / event stream
+    transaction nodes -> causal time-aware static graph
 
-``edge_delta`` controls temporal-flow edges between transaction nodes. The
-snapshot ``bin_size`` and ``stride`` control how the already-defined graph is
-materialized over time; they are different concepts. Event streams use the
-natural account-level representation because transaction-as-node event streams
-require separate node-arrival semantics and are not currently supported.
+``edge_delta`` controls temporal-flow relations between transaction nodes.
+Transaction attributes become node features and ``time_delta`` is a relation
+edge feature. In account graphs, account metadata belongs to nodes and every
+transaction remains an edge or event.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
-from itertools import islice
 from pathlib import Path
 
 from amlgraphx.datasets import load_dataset
-from amlgraphx.graph import prepare_graph
+from amlgraphx.graph import GraphFeatureSpec, prepare_graph, prepare_pyg_graph
 from amlgraphx.split import TemporalSplit, build_temporal_node_masks
 
 MAX_TRANSACTIONS = 100_000
 EDGE_DELTA = timedelta(hours=4)
-SNAPSHOT_BIN = timedelta(days=1)
-SNAPSHOT_STRIDE = timedelta(days=1)
 
 
 def main(*, cache_dir: Path | None = None) -> None:
-    """Load IBM HI-Small and inspect its three temporal graph modes."""
+    """Load IBM HI-Small and inspect its supported graph representations."""
     # ``load_dataset`` downloads and prepares the adapter; the transaction
     # table itself remains lazy until a graph builder needs to materialize it.
     # ``load_dataset`` 会下载并准备 adapter；交易表在 builder 需要时才物化。
@@ -80,39 +78,38 @@ def main(*, cache_dir: Path | None = None) -> None:
         f"test={masks.test_mask.sum().item()}"
     )
 
-    # Mode 2: a sequence of daily transaction-node snapshots.
-    # 模式 2：按天划分的 transaction-node snapshot 序列。
-    snapshot_iterator = prepare_graph(
+    # The high-level PyG facade maps transaction attributes and labels to nodes,
+    # while the transaction-relation time delta becomes an edge feature.
+    transaction_data = prepare_pyg_graph(
         transactions,
         node_type="transaction",
-        temporal="snapshot",
+        temporal="static",
         edge_delta=EDGE_DELTA,
-        bin_size=SNAPSHOT_BIN,
-        stride=SNAPSHOT_STRIDE,
-        drop_last=False,
+        features=GraphFeatureSpec(
+            node_columns=("amount",),
+            edge_columns=("time_delta",),
+            label_column="label",
+        ),
     )
-    print("First snapshots / 前几个 snapshot:")
-    for snapshot in islice(snapshot_iterator, 3):
-        print(
-            f"  #{snapshot.index}: "
-            f"[{snapshot.start_time}, {snapshot.end_time}) -> "
-            f"{snapshot.num_nodes} nodes, {snapshot.num_edges} edges, "
-            f"edge_index={tuple(snapshot.edge_index.shape)}"
-        )
+    print("Transaction PyG data / 交易节点 PyG 数据:", transaction_data)
 
-    # Mode 3: a continuous account-level stream ordered by transaction time.
-    # 模式 3：按交易时间排序的连续账户级事件流。
-    event_stream = prepare_graph(
+    # Account-as-node event streams need no manual graph conversion: amount is
+    # the event message and the transaction label is the event target.
+    event_stream = prepare_pyg_graph(
         transactions,
         node_type="account",
         temporal="event_stream",
+        features=GraphFeatureSpec(
+            edge_columns=("amount",),
+            label_column="label",
+        ),
     )
     print(
         "Account event stream / 账户事件流: "
         f"{event_stream.num_nodes} nodes, {event_stream.num_events} events"
     )
-    print("First events / 前几个事件:")
-    print(event_stream.events.head(3))
+    print("First event messages / 前几个事件特征:")
+    print(event_stream.msg[:3])
 
 
 if __name__ == "__main__":

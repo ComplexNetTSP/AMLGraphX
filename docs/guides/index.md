@@ -19,7 +19,11 @@ transaction_graph = prepare_graph(
 )
 ```
 
-For account nodes, use `temporal="static"`, `"snapshot"`, or `"event_stream"`. Transaction nodes support static and snapshot views only.
+For account nodes, use `temporal="static"`, `"snapshot"`, or `"event_stream"`.
+Transaction nodes support `temporal="static"`: their identities do not persist
+between windows, so a transaction window is a batching strategy rather than a
+snapshot evolution. A transaction-node event stream would require explicit
+node-arrival semantics and is not currently implemented.
 
 ## Build snapshots or an event stream
 
@@ -40,7 +44,9 @@ for snapshot in daily_snapshots:
     print(snapshot.index, snapshot.start_time, snapshot.end_time)
 ```
 
-Snapshots are a sequence of separate time windows. They are not an event stream. For a continuous account interaction stream, request `temporal="event_stream"` and convert it with `to_pyg_temporal_data()` when the model expects PyTorch Geometric `TemporalData`.
+Account snapshots are a sequence of graph states with stable account identity.
+They are not an event stream. For continuous account interactions, request
+`temporal="event_stream"`.
 
 ## Use a strict chronological split
 
@@ -64,19 +70,31 @@ test_graph = partitions.test
 
 Each result is an induced transaction graph. Cross-partition edges are removed, so a test target cannot use a training-period edge solely because the complete graph was built first. If you intentionally need full-graph transductive structure, use `build_temporal_node_masks()` instead and state that protocol when reporting results.
 
-## Convert to PyTorch Geometric deliberately
+## Build model-ready features through one API
 
 ```python
-from amlgraphx.graph import to_pyg_data
+from amlgraphx.graph import GraphFeatureSpec, prepare_pyg_graph
 
-data = to_pyg_data(
-    transaction_graph,
-    node_feature_columns=["amount"],
-    node_label_column="label",
+data = prepare_pyg_graph(
+    transactions,
+    node_type="transaction",
+    temporal="static",
+    edge_delta=timedelta(hours=4),
+    features=GraphFeatureSpec(
+        node_columns=("amount",),
+        edge_columns=("time_delta",),
+        label_column="label",
+    ),
 )
 ```
 
-Only numerical columns can be converted as model features. Encode categories and fit normalizers using the training period only; AMLGraphX intentionally does not make those potentially leaky decisions on your behalf.
+The facade assigns labels according to graph semantics: transaction labels are
+`edge_y` in account graphs and `node_y` in transaction graphs. Transaction
+attributes are account-graph edge features but transaction-graph node features;
+`time_delta` describes a relation between two transaction nodes. Only numerical
+columns are converted directly. Encode categories and fit normalizers using the
+training period only; AMLGraphX does not make those potentially leaky decisions
+on your behalf.
 
 ## Enrich tabular features from transaction history
 

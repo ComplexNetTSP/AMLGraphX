@@ -219,6 +219,8 @@ __marimo__/
 
 # AMLGraphX local tooling, data, and experiment outputs
 .codex/
+/acmart-primary/
+/papers/
 .vscode/
 .idea/
 .DS_Store
