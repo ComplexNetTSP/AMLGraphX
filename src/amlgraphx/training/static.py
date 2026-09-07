@@ -258,19 +258,42 @@ def _batch_num_nodes(batch: Any) -> int:
     )
 
 
-def _validate_logits(logits: Any, node_count: int) -> Tensor:
-    """Validate and normalize the model's one-logit-per-node output."""
+def _validate_logits(
+    logits: Any, item_count: int, *, item_name: str = "node"
+) -> Tensor:
+    """Validate and normalize one floating-point logit for each target item."""
     if not isinstance(logits, Tensor):
         raise ModelContractError("model must return a torch.Tensor of binary logits")
     if logits.ndim == 2 and logits.shape[1] == 1:
         logits = logits[:, 0]
-    if logits.ndim != 1 or logits.numel() != node_count:
+    if logits.ndim != 1 or logits.numel() != item_count:
         raise ModelContractError(
-            "model output must have shape [num_nodes] or [num_nodes, 1]"
+            f"model output must have shape [num_{item_name}s] or [num_{item_name}s, 1]"
         )
     if not logits.is_floating_point():
         raise ModelContractError("model output logits must use a floating-point dtype")
     return logits
+
+
+def _batch_num_edges(batch: Any) -> int:
+    """Infer edge count for edge-risk models without requiring labels."""
+    value = (
+        batch.get("num_edges")
+        if isinstance(batch, Mapping)
+        else getattr(batch, "num_edges", None)
+    )
+    if isinstance(value, int) and value > 0:
+        return value
+    edge_index = (
+        batch.get("edge_index")
+        if isinstance(batch, Mapping)
+        else getattr(batch, "edge_index", None)
+    )
+    if isinstance(edge_index, Tensor) and edge_index.ndim == 2:
+        return int(edge_index.shape[1])
+    raise ModelContractError(
+        "batch must expose edge_index or a positive num_edges value"
+    )
 
 
 def _validate_mask(value: Any, node_count: int, name: str) -> Tensor:

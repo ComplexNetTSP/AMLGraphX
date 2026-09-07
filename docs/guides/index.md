@@ -161,6 +161,46 @@ This is appropriate for models with no state between windows. A model that
 keeps state across calls must use ``shuffle=False`` and define its reset policy
 at split boundaries.
 
+## Run a researcher-defined model
+
+``Experiment`` is deliberately smaller than a configuration framework. Build
+and inspect the dataset, graph, split, and loaders first; then pass only the
+researcher-owned PyTorch model and explicit input contract to the experiment.
+It checks a compact structural dummy batch before training, uses Lightning's
+progress bar for epoch speed and validation metrics, and returns aligned test
+risk scores for AML evaluation.
+
+```python
+from amlgraphx.evaluation import Precision, Recall
+from amlgraphx.experiments import BinaryRiskTask, Experiment
+
+experiment = Experiment(
+    model=my_model,
+    task=BinaryRiskTask(representation="static", target_kind="node"),
+    metrics={"precision": Precision(), "recall": Recall()},
+    trainer_kwargs={"max_epochs": 20, "accelerator": "auto"},
+    evaluation_kwargs={"top_fractions": (0.01,)},
+)
+result = experiment.run(
+    train_dataloaders=train_loader,
+    validation_dataloaders=validation_loader,
+    test_dataloaders=test_loader,
+)
+```
+
+For a full static graph, omit ``target_mask_attr``: the standard
+``train_mask``, ``validation_mask``, and ``test_mask`` are used. For a
+bounded static window loader, set ``target_mask_attr="target_node_mask"`` or
+``"target_edge_mask"``. Account graphs commonly score transaction edges, so
+use ``target_kind="edge"``. Account event streams use
+``BinaryRiskTask("event_stream", "event")``. The examples directory includes
+complete IBM HI-Small static, JODIE-style, and TGN-style paths.
+
+For a classical estimator, ``TabularExperiment`` follows the same final
+risk-score boundary using ``fit(train_X, train_y)`` and held-out test arrays.
+It accepts any sklearn-style estimator with ``fit`` and a probability, decision,
+or prediction method; it does not require a graph representation.
+
 ## Enrich tabular features from transaction history
 
 `GraphFeaturePreprocessor` accepts a numeric matrix whose first four columns are `[edge_id, source_id, target_id, timestamp]`; later columns are numeric transaction features. It appends graph-derived features suitable for a tabular estimator.

@@ -12,6 +12,9 @@ from torchmetrics import Metric
 from .static import (
     ModelContractError,
     StaticBinaryNodePredictor,
+    _batch_num_edges,
+    _batch_num_nodes,
+    _validate_logits,
     _validate_mask,
 )
 
@@ -115,7 +118,10 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         target = self._target(batch)
         logits = self.forward(batch)
         mask = _snapshot_mask(
-            batch, self.target_mask_attr, target.numel(), target.device
+            _snapshot_target(batch),
+            self.target_mask_attr,
+            target.numel(),
+            target.device,
         )
         masked_logits = logits[mask]
         masked_target = target[mask].to(dtype=logits.dtype)
@@ -145,7 +151,8 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         """Reject snapshots that move backwards in their declared sequence."""
         if self.snapshot_index_attr is None:
             return
-        value = getattr(batch, self.snapshot_index_attr, None)
+        snapshot = _snapshot_target(batch)
+        value = getattr(snapshot, self.snapshot_index_attr, None)
         if value is None and isinstance(batch, Mapping):
             value = batch.get(self.snapshot_index_attr)
         if value is None:
@@ -167,6 +174,16 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
             )
         self._last_snapshot_index[stage] = value
 
+    def _target(self, batch: Any) -> Tensor:
+        """Read labels from a target graph when a SnapshotBatch is supplied."""
+        return super()._target(_snapshot_target(batch))
+
+    def forward(self, batch: Any) -> Tensor:
+        """Validate one logit per target node for a snapshot or SnapshotBatch."""
+        return _validate_logits(
+            self.model(batch), _batch_num_nodes(_snapshot_target(batch))
+        )
+
 
 def _snapshot_mask(
     batch: Any, name: str, node_count: int, device: torch.device
@@ -180,4 +197,27 @@ def _snapshot_mask(
     return _validate_mask(value, node_count, name)
 
 
-__all__ = ["SnapshotBinaryNodePredictor"]
+def _snapshot_target(batch: Any) -> Any:
+    """Return a SnapshotBatch target graph, or a direct snapshot unchanged."""
+    return getattr(batch, "target", batch)
+
+
+class SnapshotBinaryEdgePredictor(SnapshotBinaryNodePredictor):
+    """Train a snapshot model that scores transaction edges in target graphs."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Use edge labels and edge target masks by default."""
+        kwargs.setdefault("target_attr", "edge_y")
+        kwargs.setdefault("target_mask_attr", "target_edge_mask")
+        super().__init__(*args, **kwargs)
+
+    def forward(self, batch: Any) -> Tensor:
+        """Validate one logit for every transaction edge in the target graph."""
+        return _validate_logits(
+            self.model(batch),
+            _batch_num_edges(_snapshot_target(batch)),
+            item_name="edge",
+        )
+
+
+__all__ = ["SnapshotBinaryEdgePredictor", "SnapshotBinaryNodePredictor"]

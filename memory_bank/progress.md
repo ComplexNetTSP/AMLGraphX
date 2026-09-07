@@ -1,5 +1,47 @@
 # AMLGraphX 当前进度
 
+## Model-agnostic experiment lifecycle
+
+- 新增 `amlgraphx.experiments.Experiment` 与 `BinaryRiskTask`：研究者先显式完成
+  dataset loading、graph construction、temporal split 和 loader；再只提交自己的
+  PyTorch model 和 `node`/`edge`/`event` target contract。`Experiment` 在任何
+  optimizer step 前从首个训练 batch 生成小型 structural dummy，验证模型输入和每个
+  target 的一个 binary logit 输出。
+- `Experiment.run()` 固定 `fit(train, validation) -> test -> predict(test) -> AML
+  risk metrics` 生命周期；接受任意 named TorchMetrics mapping，默认保留 Lightning
+  tqdm progress bar 与 validation metrics，且不隐式写 checkpoint 或 tracking files。
+  测试预测按 event batch 对齐，避免 Lightning 对 `TemporalDataLoader` 预测输出的通用
+  collection 处理改变 event-score 对应关系。
+- `TabularExperiment` 为 sklearn 风格 estimator 提供同一 frozen-test score boundary：
+  仅对 train array 调用 `fit`，并从 `predict_proba`、`decision_function` 或 `predict`
+  读取一维 risk score；额外 callable metrics 可自由组合。
+- 新增 account graph 的 `StaticBinaryEdgePredictor` 和
+  `SnapshotBinaryEdgePredictor`；account static/snapshot 交易标签可使用 `edge_y` 和
+  edge mask 训练。`SnapshotBinaryNodePredictor` 现在也可读取 `SnapshotBatch.target`。
+- 新增三个临时 IBM HI-Small 示例：`ibm_transaction_static_experiment.py` 展示 full
+  graph masks 与 causal time windows；`ibm_jodie_experiment.py` 与
+  `ibm_tgn_experiment.py` 分别演示 JODIE-style projection/update 与 TGN-style
+  memory/message update。两个 temporal 示例是轻量教学实现，不声称 paper-faithful
+  benchmark。每个示例使用 `TemporaryDirectory` 并在退出时删除下载数据。
+- 新增合成 Experiment/edge/snapshot contract tests；真实 smoke tests 已用 IBM
+  HI-Small 1,000--12,000 temporal-band transactions、1 epoch 跑通 static full/window、
+  JODIE-style 和 TGN-style path。
+
+更新时间：2026-09-07
+
+## IBM small batching examples
+
+- 新增 `examples/ibm_transaction_batching.py`：使用 IBM HI-Small 的六个时间段组成
+  可控样本，演示 transaction-as-node 完整 time-aware static `Data`，以及带
+  `lookback`、`target_node_mask` 的滑动窗口 PyG `Batch`。
+- 新增 `examples/ibm_account_batching.py`：演示 account-as-node static `Data` 与
+  `target_edge_mask` 窗口 batch、五步 context 的 `SnapshotBatch`，以及 PyG
+  `TemporalDataLoader` 的连续事件 batch；每个阶段打印类型、shape、字段和少量值。
+- 两个示例默认使用 12,000 条跨六个时间段的 HI-Small 交易，`--limit 0` 可选择完整
+  数据集；已用真实缓存数据运行通过。示例保持 PyG 标准对象，不实现模型或额外抽象。
+
+更新时间：2026-09-04
+
 ## PR #8 event-state autograd fix
 
 - `EventStreamBinaryPredictor` 在训练时不再于 `training_step()` 内修改研究员模型的

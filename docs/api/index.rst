@@ -52,3 +52,10 @@ Risk-score evaluation
 .. automodule:: amlgraphx.evaluation
    :members:
    :show-inheritance:
+
+Experiment lifecycle
+--------------------
+
+.. automodule:: amlgraphx.experiments
+   :members:
+   :show-inheritance:
