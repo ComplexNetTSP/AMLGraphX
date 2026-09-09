@@ -4,6 +4,7 @@ from .graph import (
     AccountEventStream,
     AccountGraph,
     GraphBuildSpec,
+    GraphFeatureSpec,
     GraphNodeType,
     GraphTemporalMode,
     TransactionGraph,
@@ -14,6 +15,7 @@ from .graph import (
     build_time_aware_account_graph,
     build_transaction_graph,
     prepare_graph,
+    prepare_pyg_graph,
     to_pyg_data,
     to_pyg_temporal_data,
 )
@@ -29,6 +31,7 @@ __all__ = [
     "AccountEventStream",
     "AccountGraph",
     "GraphBuildSpec",
+    "GraphFeatureSpec",
     "GraphNodeType",
     "GraphTemporalMode",
     "TemporalNodeMasks",
@@ -43,6 +46,7 @@ __all__ = [
     "build_transaction_graph",
     "hello",
     "prepare_graph",
+    "prepare_pyg_graph",
     "to_pyg_data",
     "to_pyg_temporal_data",
 ]

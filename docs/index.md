@@ -18,7 +18,8 @@ Load a supported dataset or normalize a Polars transaction table, then build you
 :link: concepts/index
 :link-type: doc
 
-Choose between account and transaction nodes, snapshots and event streams, and strict or transductive time protocols.
+Choose account or transaction nodes, then use only the temporal modes with
+well-defined identity and event semantics.
 :::
 
 :::{grid-item-card} Find the Python API

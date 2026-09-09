@@ -2,9 +2,11 @@
 
 from .api import (
     GraphBuildSpec,
+    GraphFeatureSpec,
     GraphNodeType,
     GraphTemporalMode,
     prepare_graph,
+    prepare_pyg_graph,
 )
 from .builders import (
     AccountGraph,
@@ -27,6 +29,7 @@ __all__ = [
     "AccountEventStream",
     "AccountGraph",
     "GraphBuildSpec",
+    "GraphFeatureSpec",
     "GraphNodeType",
     "GraphSnapshot",
     "GraphTemporalMode",
@@ -39,6 +42,7 @@ __all__ = [
     "build_transaction_graph",
     "build_transaction_snapshots",
     "prepare_graph",
+    "prepare_pyg_graph",
     "to_pyg_data",
     "to_pyg_temporal_data",
 ]

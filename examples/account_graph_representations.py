@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import polars as pl
 
-from amlgraphx.graph import prepare_graph, to_pyg_data, to_pyg_temporal_data
+from amlgraphx.graph import GraphFeatureSpec, prepare_graph, prepare_pyg_graph
 
 
 def main() -> None:
@@ -42,39 +42,40 @@ def main() -> None:
         temporal="static",
         account_metadata=accounts,
     )
-    pyg_graph = to_pyg_data(
-        static_graph,
-        node_feature_columns=["balance"],
-        edge_feature_columns=["amount"],
-        edge_label_column="label",
+    features = GraphFeatureSpec(
+        node_columns=("balance",),
+        edge_columns=("amount",),
+        label_column="label",
+    )
+    pyg_graph = prepare_pyg_graph(
+        transactions,
+        node_type="account",
+        temporal="static",
+        account_metadata=accounts,
+        features=features,
     )
     print("Static / 静态图:", static_graph.num_nodes, static_graph.num_edges)
     print("PyG Data:", pyg_graph)
 
-    snapshots = prepare_graph(
+    snapshots = prepare_pyg_graph(
         transactions,
         node_type="account",
         temporal="snapshot",
         account_metadata=accounts,
+        features=features,
         bin_size=timedelta(days=1),
         stride=timedelta(days=1),
         drop_last=False,
     )
     for snapshot in snapshots:
-        # ``snapshot.graph.edges`` still contains amount, timestamp, channel,
-        # label, and every other transaction feature.
-        print("Snapshot:", snapshot.index, snapshot.graph.edges.shape)
+        print("Snapshot:", snapshot.snapshot_index, snapshot)
 
-    stream = prepare_graph(
+    temporal_data = prepare_pyg_graph(
         transactions,
         node_type="account",
         temporal="event_stream",
         account_metadata=accounts,
-    )
-    temporal_data = to_pyg_temporal_data(
-        stream,
-        message_columns=["amount"],
-        label_column="label",
+        features=features,
     )
     print("Event stream / 事件流:", temporal_data)
 

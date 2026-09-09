@@ -1,9 +1,10 @@
 """Snapshot graph temporal representation.
 
-This module owns the public concept of a snapshot sequence: temporal bins,
-window movement, and snapshot-specific output. Transaction-node snapshots
-reuse the existing data module. Account-node snapshots select transaction
-edges by time and keep all edge feature columns unchanged.
+This module owns account snapshot sequences: temporal bins, window movement,
+and snapshot-specific output. Account-node snapshots select transaction edges
+by time and keep all edge feature columns unchanged. The legacy transaction
+window helper remains available for batching large static transaction graphs;
+it is not exposed as a transaction snapshot mode by the high-level API.
 
 中文：
     本模块负责 snapshot 序列的公共语义：时间 bin、窗口移动和 snapshot 输出。
@@ -84,7 +85,7 @@ def build_transaction_snapshots(
     end_time: datetime | None = None,
     drop_last: bool = True,
 ) -> Iterator[GraphSnapshot]:
-    """Yield transaction-node snapshots over half-open temporal bins.
+    """Yield batching windows from a static transaction-node graph.
 
     ``bin_size`` defines the duration of one snapshot and ``stride`` defines
     how far the next bin starts. If they are equal, bins are disjoint; if the
@@ -96,9 +97,10 @@ def build_transaction_snapshots(
         snapshot 的起点移动距离。两者相等时窗口不重叠，stride 更小时窗口
         重叠。本函数保留当前诱导子图和局部稀疏 ``edge_index`` 语义。
 
-    This wrapper is intentionally small. The implementation can move here in a
-    later change without changing the public function name.
-    / 当前只保留薄包装；之后可以把实现迁移到这里而不改变公共函数名。
+    Transaction nodes do not persist across windows, so this function does not
+    represent snapshot evolution. It remains a low-level compatibility helper
+    for bounded-memory training. Prefer a full causal transaction graph with
+    chronological node masks when it fits in memory.
     """
     return sliding_snapshots(
         graph,
