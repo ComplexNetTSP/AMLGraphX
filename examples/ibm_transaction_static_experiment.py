@@ -5,9 +5,11 @@ This example shows the complete static-graph path:
 ``dataset -> canonical transactions -> PyG graph -> split loaders -> Experiment``.
 
 Use ``--mode full`` when the graph fits in accelerator memory. Use
-``--mode windows`` to keep the same time-aware transaction graph semantics but
-score one chronological target window at a time with causal lookback context.
-The temporary cache is deleted when the process exits.
+``--mode windows`` to score one chronological target window at a time with
+bounded lookback context. ``sampled-full`` keeps the physical full graph but
+uses only strict-past sampled neighborhoods for each target; ``sampled-windows``
+adds the same strict-past sampling inside bounded sliding windows. The temporary
+cache is deleted when the process exits.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from amlgraphx.datasets import load_dataset
 from amlgraphx.evaluation import Precision, Recall
 from amlgraphx.experiments import BinaryRiskTask, Experiment
 from amlgraphx.graph import GraphFeatureSpec, prepare_pyg_graph
+from amlgraphx.sampling import causal_static_node_loader
 
 
 class TransactionRiskMLP(nn.Module):
@@ -110,7 +113,7 @@ def window_loader(data: object, start: int, end: int, *, batch_size: int):
 
 
 def make_loaders(data: object, mode: str, batch_size: int):
-    """Choose full-graph masks or bounded time windows without changing graph meaning."""
+    """Choose full, windowed, or strictly causal sampled static graph inputs."""
     add_full_graph_masks(data)
     if mode == "full":
         loader = DataLoader([data], batch_size=1)
@@ -121,7 +124,58 @@ def make_loaders(data: object, mode: str, batch_size: int):
     last = int(time.max()) + 1
     train_end = first + 3 * (last - first) // 5
     validation_end = first + 4 * (last - first) // 5
+    if mode == "sampled-full":
+        return (
+            causal_static_node_loader(
+                data,
+                target_mask_attr="train_mask",
+                num_neighbors=[25, 10],
+                batch_size=batch_size,
+                shuffle=True,
+            ),
+            causal_static_node_loader(
+                data,
+                target_mask_attr="validation_mask",
+                num_neighbors=[25, 10],
+                batch_size=batch_size,
+            ),
+            causal_static_node_loader(
+                data,
+                target_mask_attr="test_mask",
+                num_neighbors=[25, 10],
+                batch_size=batch_size,
+            ),
+            BinaryRiskTask("static", "node", target_mask_attr="target_node_mask"),
+        )
+
     task = BinaryRiskTask("static", "node", target_mask_attr="target_node_mask")
+    if mode == "sampled-windows":
+        loader_kwargs = {
+            "num_neighbors": [25, 10],
+            "batch_size": batch_size,
+            "window_size": timedelta(days=1),
+            "lookback": timedelta(hours=4),
+        }
+        return (
+            causal_static_node_loader(
+                data,
+                target_mask_attr="train_mask",
+                shuffle=True,
+                **loader_kwargs,
+            ),
+            causal_static_node_loader(
+                data,
+                target_mask_attr="validation_mask",
+                **loader_kwargs,
+            ),
+            causal_static_node_loader(
+                data,
+                target_mask_attr="test_mask",
+                **loader_kwargs,
+            ),
+            task,
+        )
+
     return (
         window_loader(data, first, train_end, batch_size=batch_size),
         window_loader(data, train_end, validation_end, batch_size=batch_size),
@@ -174,7 +228,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=12_000)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--mode", choices=("full", "windows"), default="full")
+    parser.add_argument(
+        "--mode",
+        choices=("full", "windows", "sampled-full", "sampled-windows"),
+        default="sampled-windows",
+        help="Static graph execution protocol; sampled modes use strict-past neighborhoods.",
+    )
     return parser.parse_args()
 
 

@@ -30,9 +30,15 @@ class StaticGraphWindowDataset(Dataset[Data]):
     ``lookback`` retains earlier context in every subgraph; for a causal
     transaction graph it should equal the edge-construction ``delta``. Target
     intervals remain non-overlapping even though their context can overlap.
+    This class bounds a graph at window granularity. Use
+    :func:`amlgraphx.sampling.causal_static_node_loader` or
+    :func:`amlgraphx.sampling.causal_static_edge_loader` when each individual
+    target must exclude later observations from the same target window.
 
     The dataset builds one sparse local subgraph only when it is indexed. This
     avoids materializing all windows before a PyG ``DataLoader`` starts work.
+    Each local graph retains ``n_id`` (and, for edge windows, ``e_id``) so a
+    downstream neighborhood sampler can trace predictions to full-graph IDs.
     """
 
     def __init__(
@@ -261,6 +267,8 @@ def _node_window(data: Data, start: int, end: int, lookback: int, index: int) ->
     node_time = data.node_time
     included = (node_time >= start - lookback) & (node_time < end)
     window = data.subgraph(included)
+    source_ids = getattr(data, "n_id", torch.arange(data.num_nodes))
+    window.n_id = source_ids[included]
     window.target_node_mask = (window.node_time >= start) & (window.node_time < end)
     window.window_id = torch.tensor(index, dtype=torch.long)
     return window
@@ -273,6 +281,10 @@ def _edge_window(data: Data, start: int, end: int, lookback: int, index: int) ->
     edge_window = data.edge_subgraph(included)
     active_nodes = edge_window.edge_index.flatten().unique(sorted=True)
     window = edge_window.subgraph(active_nodes)
+    source_node_ids = getattr(data, "n_id", torch.arange(data.num_nodes))
+    source_edge_ids = getattr(data, "e_id", torch.arange(data.num_edges))
+    window.n_id = source_node_ids[active_nodes]
+    window.e_id = source_edge_ids[included]
     window.target_edge_mask = (window.edge_time >= start) & (window.edge_time < end)
     window.window_id = torch.tensor(index, dtype=torch.long)
     return window

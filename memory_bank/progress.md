@@ -1,5 +1,38 @@
 # AMLGraphX 当前进度
 
+## Strict causal time-aware static graph sampling
+
+- 新增 `amlgraphx.sampling.causal_static_node_loader()` 与
+  `causal_static_edge_loader()`：full graph 按显式 split mask 选 target；可选
+  sliding window 先限制 lookback，再按每个 target 的时间采样局部邻域。两者均使用
+  PyG 原生 `Data` batch，不引入模型或自定义 batch 类型。
+- 时间不变量为严格过去：采样 cutoff 使用 target timestamp 的前一纳秒，因此同一
+  timestamp 与未来节点/交易边均不能成为 context。节点 batch 以
+  `target_node_mask` 标记 seed；账户边 batch 以 `edge_label`、
+  `edge_label_index` 和 `target_edge_mask` 对齐交易风险标签，能直接交给
+  `BinaryRiskTask`、`Experiment` 和 AML ranking metrics。目标边不会进入其自己的
+  message-passing context。
+- `StaticGraphWindowDataset` 现在保留 full-graph `n_id` 和 `e_id`，使窗口和
+  sampled prediction 能追溯至原始图实体；其原有窗口级行为保持不变。
+- `examples/ibm_transaction_static_experiment.py` 新增 `sampled-full` 与
+  `sampled-windows` 模式；已用 IBM HI-Small 1,200 条样本、1 epoch 实跑
+  `sampled-windows`，得到 84 条冻结 test 风险分数和完整 AML metrics。
+- 新增合成测试覆盖 future/equal-time 排除、window split 空交集跳过、edge target
+  排除与 Experiment score/label 对齐；全量验证 `130 passed`。
+
+更新时间：2026-09-11
+
+## PyG sampling backend
+
+- 新增与项目 `torch 2.13.x + CUDA 13.2` 精确匹配的
+  `pyg-lib==0.9.0+pt213cu132`，通过显式 uv flat index 从 PyG 官方 wheel
+  仓库解析；同时把 Torch 限制在 `<2.14`，避免二进制 ABI 不匹配。
+- 已验证 PyG 的 `NeighborLoader`、带 node time 的 temporal neighbor sampling，
+  以及 `LinkNeighborLoader` 的 edge-time sampling 均可执行；完整 Python 测试
+  `124 passed`。
+
+更新时间：2026-09-09
+
 ## Model-agnostic experiment lifecycle
 
 - 新增 `amlgraphx.experiments.Experiment` 与 `BinaryRiskTask`：研究者先显式完成

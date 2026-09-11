@@ -441,10 +441,26 @@ def _dummy_data(batch: Data) -> Data:
     """Keep at most four nodes and one synthetic edge with aligned attributes."""
     node_count = min(int(batch.num_nodes or 1), 4)
     edge_count = 1 if int(batch.num_edges) else 0
+    edge_label = getattr(batch, "edge_label", None)
+    edge_target_count = (
+        min(edge_label.numel(), 1) if isinstance(edge_label, Tensor) else edge_count
+    )
     dummy = Data(num_nodes=node_count)
     for name, value in batch.to_dict().items():
         if name == "edge_index":
             dummy.edge_index = torch.zeros((2, edge_count), dtype=torch.long)
+        elif name == "edge_label_index":
+            dummy.edge_label_index = torch.zeros(
+                (2, edge_target_count), dtype=torch.long
+            )
+        elif name in {
+            "edge_label",
+            "edge_label_time",
+            "target_edge_mask",
+            "target_edge_time",
+        }:
+            if isinstance(value, Tensor):
+                setattr(dummy, name, value[:edge_target_count].clone())
         elif (
             isinstance(value, Tensor)
             and value.ndim > 0
@@ -471,7 +487,8 @@ def _dummy_data(batch: Data) -> Data:
         "target_edge_mask",
     ):
         if hasattr(dummy, name):
-            setattr(dummy, name, torch.ones(edge_count, dtype=torch.bool))
+            count = edge_target_count if name == "target_edge_mask" else edge_count
+            setattr(dummy, name, torch.ones(count, dtype=torch.bool))
     return dummy
 
 

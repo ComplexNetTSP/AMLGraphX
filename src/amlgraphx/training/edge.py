@@ -42,10 +42,12 @@ class StaticBinaryEdgePredictor(StaticBinaryNodePredictor):
         )
 
     def forward(self, batch: Any) -> Tensor:
-        """Return validated raw logits for every directed transaction edge."""
-        return _validate_logits(
-            self.model(batch), _batch_num_edges(batch), item_name="edge"
+        """Return logits for graph edges or PyG ``edge_label`` query edges."""
+        label = getattr(batch, "edge_label", None)
+        item_count = (
+            label.numel() if isinstance(label, Tensor) else _batch_num_edges(batch)
         )
+        return _validate_logits(self.model(batch), item_count, item_name="edge")
 
 
 __all__ = ["StaticBinaryEdgePredictor"]
