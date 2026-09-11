@@ -44,6 +44,11 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
             with no selected events is history-only: it calls ``update_state``
             without computing loss or metrics, so it can warm up validation or
             test state.
+        train_mask_attr: Optional training selector overriding ``event_mask_attr``.
+        validation_mask_attr: Optional validation selector overriding
+            ``event_mask_attr``.
+        test_mask_attr: Optional test and prediction selector overriding
+            ``event_mask_attr``.
         timestamp_attr: Event timestamp field, normally ``t`` or
             ``"event_time"`` for sampled local graphs.
         reset_state: Whether to call an optional model ``reset_state()`` hook.
@@ -58,6 +63,9 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
         *,
         metrics: Mapping[str, Metric] | None = None,
         event_mask_attr: str | None = None,
+        train_mask_attr: str | None = None,
+        validation_mask_attr: str | None = None,
+        test_mask_attr: str | None = None,
         timestamp_attr: str = "t",
         reset_state: bool = True,
         **kwargs: Any,
@@ -71,6 +79,9 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
             **kwargs,
         )
         self.event_mask_attr = event_mask_attr
+        self.train_mask_attr = train_mask_attr or event_mask_attr
+        self.validation_mask_attr = validation_mask_attr or event_mask_attr
+        self.test_mask_attr = test_mask_attr or event_mask_attr
         self.timestamp_attr = timestamp_attr
         self.reset_state = reset_state
         self._last_event_time: dict[str, Tensor | None] = {
@@ -120,7 +131,7 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
         del batch_idx, dataloader_idx
         self._check_event_order(batch, "predict")
         target = self._target(batch)
-        mask = _event_mask(batch, self.event_mask_attr, target.numel(), target.device)
+        mask = _event_mask(batch, self.test_mask_attr, target.numel(), target.device)
         if bool(mask.any()):
             scores = torch.sigmoid(self.forward(batch))
         else:
@@ -149,7 +160,12 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
         """Validate order, score events, compute loss, and update state last."""
         self._check_event_order(batch, stage)
         target = self._target(batch)
-        mask = _event_mask(batch, self.event_mask_attr, target.numel(), target.device)
+        mask_attr = {
+            "train": self.train_mask_attr,
+            "val": self.validation_mask_attr,
+            "test": self.test_mask_attr,
+        }[stage]
+        mask = _event_mask(batch, mask_attr, target.numel(), target.device)
         if not bool(mask.any()):
             if stage == "train":
                 raise ModelContractError(

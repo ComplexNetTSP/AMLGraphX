@@ -22,7 +22,7 @@ from tempfile import TemporaryDirectory
 import polars as pl
 import torch
 from torch import nn
-from torch.utils.data import Subset
+from torch.utils.data import Dataset
 from torch_geometric.loader import DataLoader
 
 from amlgraphx.data import StaticGraphWindowDataset
@@ -100,16 +100,46 @@ def window_loader(data: object, start: int, end: int, *, batch_size: int):
     windows = StaticGraphWindowDataset(
         data, window_size=timedelta(days=1), lookback=timedelta(hours=4)
     )
+    node_time = data.node_time  # type: ignore[union-attr]
     selected = [
         index
         for index, window_start in enumerate(windows.window_starts)
-        if start <= window_start < end
+        if bool(
+            torch.any(
+                (node_time >= max(start, window_start))
+                & (node_time < min(end, window_start + windows.window_ns))
+            )
+        )
     ]
     if not selected:
-        raise ValueError(
-            "the selected temporal split contains no complete target windows"
-        )
-    return DataLoader(Subset(windows, selected), batch_size=batch_size, shuffle=False)
+        raise ValueError("the selected temporal split contains no prediction targets")
+    split_windows = _SplitWindowDataset(windows, selected, start, end)
+    return DataLoader(split_windows, batch_size=batch_size, shuffle=False)
+
+
+class _SplitWindowDataset(Dataset):
+    """Clip lazy window targets to one exact chronological split."""
+
+    def __init__(
+        self,
+        windows: StaticGraphWindowDataset,
+        indices: list[int],
+        start: int,
+        end: int,
+    ) -> None:
+        self.windows = windows
+        self.indices = indices
+        self.start = start
+        self.end = end
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, index: int):
+        window = self.windows[self.indices[index]]
+        in_split = (window.node_time >= self.start) & (window.node_time < self.end)
+        window.target_node_mask &= in_split
+        return window
 
 
 def make_loaders(data: object, mode: str, batch_size: int):

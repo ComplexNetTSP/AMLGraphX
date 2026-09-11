@@ -55,6 +55,41 @@ def test_snapshot_predictor_masks_context_nodes(
     assert seen == [1, 0]
 
 
+def test_snapshot_predictor_uses_stage_specific_masks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each snapshot lifecycle stage selects only its configured targets."""
+    seen: list[list[int]] = []
+
+    class RecordingLoss:
+        def __call__(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            seen.append(target.to(dtype=torch.int64).tolist())
+            return nn.functional.binary_cross_entropy_with_logits(logits, target)
+
+    snapshot = _snapshot(1)
+    snapshot.train_targets = torch.tensor([True, False, False])
+    snapshot.validation_targets = torch.tensor([False, True, False])
+    snapshot.test_targets = torch.tensor([False, False, True])
+    predictor = SnapshotBinaryNodePredictor(
+        _NodeLinear(),
+        RecordingLoss(),
+        metrics={},
+        train_mask_attr="train_targets",
+        validation_mask_attr="validation_targets",
+        test_mask_attr="test_targets",
+    )
+    monkeypatch.setattr(predictor, "log", lambda *args, **kwargs: None)
+
+    predictor.on_train_epoch_start()
+    predictor.training_step(snapshot, 0)
+    predictor.on_validation_epoch_start()
+    predictor.validation_step(snapshot, 0)
+    predictor.on_test_epoch_start()
+    predictor.test_step(snapshot, 0)
+
+    assert seen == [[0], [1], [0]]
+
+
 def test_snapshot_predictor_rejects_backward_sequence() -> None:
     """Snapshot order is validated instead of silently being rearranged."""
     predictor = SnapshotBinaryNodePredictor(
@@ -189,3 +224,56 @@ def test_event_predictor_defers_mutable_state_until_after_backward() -> None:
     trainer.fit(predictor, train_dataloaders=loader)
 
     assert model.state.item() == 3.0
+
+
+def test_event_predictor_uses_stage_specific_masks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Event train, validation, and test losses use their own selectors."""
+    seen: list[list[int]] = []
+
+    class RecordingLoss:
+        def __call__(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            seen.append(target.to(dtype=torch.int64).tolist())
+            return nn.functional.binary_cross_entropy_with_logits(logits, target)
+
+    events = _events()
+    events.train_targets = torch.tensor([True, False, False])
+    events.validation_targets = torch.tensor([False, True, False])
+    events.test_targets = torch.tensor([False, False, True])
+    predictor = EventStreamBinaryPredictor(
+        _EventModel(),
+        RecordingLoss(),
+        metrics={},
+        train_mask_attr="train_targets",
+        validation_mask_attr="validation_targets",
+        test_mask_attr="test_targets",
+    )
+    monkeypatch.setattr(predictor, "log", lambda *args, **kwargs: None)
+
+    predictor.on_train_epoch_start()
+    predictor.training_step(events, 0)
+    predictor.on_validation_epoch_start()
+    predictor.validation_step(events, 0)
+    predictor.on_test_epoch_start()
+    predictor.test_step(events, 0)
+
+    assert seen == [[0], [1], [0]]
+
+
+def test_event_prediction_uses_test_mask_for_history_only_batch() -> None:
+    """An all-false test selector warms state without scoring events."""
+    events = _events()
+    events.test_targets = torch.zeros(events.num_events, dtype=torch.bool)
+    model = _EventModel()
+    predictor = EventStreamBinaryPredictor(
+        model,
+        nn.BCEWithLogitsLoss(),
+        metrics={},
+        test_mask_attr="test_targets",
+    )
+
+    scores = predictor.predict_step(events, 0)
+
+    assert torch.isnan(scores).all()
+    assert model.calls == ["update"]

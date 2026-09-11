@@ -8,7 +8,7 @@ test data, and evaluates one aligned transaction-risk score per target.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Literal
@@ -210,10 +210,7 @@ class Experiment:
         """Fit, test, predict, and evaluate one frozen held-out test sequence."""
         self.fit(train_dataloaders, validation_dataloaders)
         test_result = self.trainer.test(self.predictor, dataloaders=test_dataloaders)
-        prediction_batches = _predict_batches(self.predictor, test_dataloaders)
-        predictions = _collect_predictions(
-            test_dataloaders, prediction_batches, self.task
-        )
+        predictions = _predict_and_collect(self.predictor, test_dataloaders, self.task)
         risk_metrics = _evaluate_predictions(predictions, self.evaluation_kwargs)
         metrics = test_result[0] if test_result else {}
         return ExperimentResult(self.predictor, metrics, predictions, risk_metrics)
@@ -303,57 +300,50 @@ def _make_predictor(
             if task.target_kind == "node"
             else SnapshotBinaryEdgePredictor
         )
+        kwargs.setdefault("train_mask_attr", task.mask_attr("train"))
+        kwargs.setdefault("validation_mask_attr", task.mask_attr("validation"))
+        kwargs.setdefault("test_mask_attr", task.mask_attr("test"))
         if task.target_mask_attr is not None:
             kwargs.setdefault("target_mask_attr", task.target_mask_attr)
     else:
         predictor_type = EventStreamBinaryPredictor
+        kwargs.setdefault("train_mask_attr", task.mask_attr("train"))
+        kwargs.setdefault("validation_mask_attr", task.mask_attr("validation"))
+        kwargs.setdefault("test_mask_attr", task.mask_attr("test"))
         if task.target_mask_attr is not None:
             kwargs.setdefault("event_mask_attr", task.target_mask_attr)
     kwargs.setdefault("target_attr", task.label_attr)
     return predictor_type(model, loss, metrics=metrics, **kwargs)
 
 
-def _collect_predictions(
-    dataloader: Iterable[Any], prediction_batches: Sequence[Any], task: BinaryRiskTask
+def _predict_and_collect(
+    predictor: nn.Module, dataloader: Iterable[Any], task: BinaryRiskTask
 ) -> RiskPredictions:
-    """Select held-out labels and scores with the same target mask on each batch."""
-    labels: list[Tensor] = []
-    scores: list[Tensor] = []
-    for batch, predicted in zip(dataloader, prediction_batches, strict=True):
-        target = _target_graph(batch, task)
-        label = getattr(target, task.label_attr)
-        score = predicted.reshape(-1)
-        mask = _target_mask(target, task.mask_attr("test"), label.numel())
-        labels.append(label[mask].detach().cpu().to(dtype=torch.long))
-        scores.append(score[mask].detach().cpu().to(dtype=torch.float32))
-    if not labels:
-        raise ValueError("test_dataloaders must yield at least one batch")
-    return RiskPredictions(torch.cat(labels), torch.cat(scores), task.target_kind)
-
-
-def _predict_batches(predictor: nn.Module, dataloader: Iterable[Any]) -> list[Tensor]:
-    """Predict directly so TemporalDataLoader event counts stay aligned to scores.
-
-    Lightning's generic prediction result handling treats some temporal batches
-    as collections. Calling the documented predictor hook directly preserves
-    one tensor per input batch while retaining its state-reset/update contract.
-    """
+    """Predict and collect matching labels during one loader traversal."""
     start = getattr(predictor, "on_predict_epoch_start", None)
     if callable(start):
         start()
     device = _module_device(predictor)
     was_training = predictor.training
     predictor.eval()
-    outputs: list[Tensor] = []
+    labels: list[Tensor] = []
+    scores: list[Tensor] = []
     try:
         with torch.no_grad():
             for index, batch in enumerate(dataloader):
                 moved = batch.to(device) if hasattr(batch, "to") else batch
-                scores = predictor.predict_step(moved, index)
-                outputs.append(scores.detach().cpu())
+                predicted = predictor.predict_step(moved, index)
+                target = _target_graph(moved, task)
+                label = getattr(target, task.label_attr)
+                score = predicted.reshape(-1)
+                mask = _target_mask(target, task.mask_attr("test"), label.numel())
+                labels.append(label[mask].detach().cpu().to(dtype=torch.long))
+                scores.append(score[mask].detach().cpu().to(dtype=torch.float32))
     finally:
         predictor.train(was_training)
-    return outputs
+    if not labels:
+        raise ValueError("test_dataloaders must yield at least one batch")
+    return RiskPredictions(torch.cat(labels), torch.cat(scores), task.target_kind)
 
 
 def _module_device(module: nn.Module) -> torch.device:
@@ -393,7 +383,9 @@ def _tabular_scores(model: Any, features: Any) -> np.ndarray:
 
 def _target_graph(batch: Any, task: BinaryRiskTask) -> Any:
     """Use the target graph inside a snapshot batch and the batch otherwise."""
-    return batch.target if task.representation == "snapshot" else batch
+    return (
+        getattr(batch, "target", batch) if task.representation == "snapshot" else batch
+    )
 
 
 def _target_mask(batch: Any, name: str | None, count: int) -> Tensor:

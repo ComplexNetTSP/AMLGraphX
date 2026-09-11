@@ -39,7 +39,11 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         model: Researcher-defined ``torch.nn.Module`` accepting one snapshot.
         loss: Callable accepting masked ``(logits, target)`` tensors.
         metrics: Optional named TorchMetrics instances.
-        target_mask_attr: Optional snapshot field selecting prediction targets.
+        target_mask_attr: Shared snapshot target selector used when a stage-specific
+            selector is not configured.
+        train_mask_attr: Optional training target selector.
+        validation_mask_attr: Optional validation target selector.
+        test_mask_attr: Optional test target selector.
         snapshot_index_attr: Field used to verify chronological order. Set to
             ``None`` to disable index checking for a loader that guarantees
             ordering externally.
@@ -54,7 +58,10 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         loss: Callable[[Tensor, Tensor], Tensor],
         *,
         metrics: Mapping[str, Metric] | None = None,
-        target_mask_attr: str = "target_mask",
+        target_mask_attr: str | None = "target_mask",
+        train_mask_attr: str | None = None,
+        validation_mask_attr: str | None = None,
+        test_mask_attr: str | None = None,
         snapshot_index_attr: str | None = "snapshot_index",
         reset_state: bool = True,
         **kwargs: Any,
@@ -62,6 +69,9 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         """Create a snapshot-sequence binary node predictor."""
         super().__init__(model, loss, metrics=metrics, **kwargs)
         self.target_mask_attr = target_mask_attr
+        self.train_mask_attr = train_mask_attr or target_mask_attr
+        self.validation_mask_attr = validation_mask_attr or target_mask_attr
+        self.test_mask_attr = test_mask_attr or target_mask_attr
         self.snapshot_index_attr = snapshot_index_attr
         self.reset_state = reset_state
         self._last_snapshot_index: dict[str, int | None] = {
@@ -75,19 +85,25 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         """Train on one ordered snapshot and its target nodes."""
         del batch_idx
         self._check_snapshot_order(batch, "train")
-        return self._snapshot_step(batch, self.train_metrics, "train")
+        return self._snapshot_step(
+            batch, self.train_mask_attr, self.train_metrics, "train"
+        )
 
     def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Validate on one ordered snapshot and its target nodes."""
         del batch_idx
         self._check_snapshot_order(batch, "val")
-        return self._snapshot_step(batch, self.validation_metrics, "val")
+        return self._snapshot_step(
+            batch, self.validation_mask_attr, self.validation_metrics, "val"
+        )
 
     def test_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Test on one ordered snapshot and its target nodes."""
         del batch_idx
         self._check_snapshot_order(batch, "test")
-        return self._snapshot_step(batch, self.test_metrics, "test")
+        return self._snapshot_step(
+            batch, self.test_mask_attr, self.test_metrics, "test"
+        )
 
     def predict_step(
         self, batch: Any, batch_idx: int, dataloader_idx: int = 0
@@ -113,13 +129,15 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         """Reset sequence order and optional model state before prediction."""
         self._start_sequence("predict")
 
-    def _snapshot_step(self, batch: Any, metrics: Any, stage: str) -> Tensor:
+    def _snapshot_step(
+        self, batch: Any, mask_attr: str | None, metrics: Any, stage: str
+    ) -> Tensor:
         """Apply target masking and update one snapshot metric collection."""
         target = self._target(batch)
         logits = self.forward(batch)
         mask = _snapshot_mask(
             _snapshot_target(batch),
-            self.target_mask_attr,
+            mask_attr,
             target.numel(),
             target.device,
         )
@@ -127,7 +145,7 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
         masked_target = target[mask].to(dtype=logits.dtype)
         if masked_target.numel() == 0:
             raise ModelContractError(
-                f"{self.target_mask_attr} must select at least one node"
+                f"{mask_attr or 'snapshot target mask'} must select at least one node"
             )
         loss = self.loss_fn(masked_logits, masked_target)
         if not isinstance(loss, Tensor) or loss.ndim != 0:
@@ -186,9 +204,11 @@ class SnapshotBinaryNodePredictor(StaticBinaryNodePredictor):
 
 
 def _snapshot_mask(
-    batch: Any, name: str, node_count: int, device: torch.device
+    batch: Any, name: str | None, node_count: int, device: torch.device
 ) -> Tensor:
     """Return an optional target mask, defaulting to every snapshot node."""
+    if name is None:
+        return torch.ones(node_count, dtype=torch.bool, device=device)
     value = getattr(batch, name, None)
     if value is None and isinstance(batch, Mapping):
         value = batch.get(name)

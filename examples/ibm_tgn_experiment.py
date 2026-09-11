@@ -33,7 +33,7 @@ class TGNStyleRiskModel(nn.Module):
         """Create stateful account memory, time encoder, message updater, and scorer."""
         super().__init__()
         self.register_buffer("memory", torch.zeros(num_accounts, memory_dim))
-        self.register_buffer("last_time", torch.zeros(num_accounts))
+        self.register_buffer("last_time", torch.zeros(num_accounts, dtype=torch.long))
         self.time_encoder = nn.Sequential(nn.Linear(1, memory_dim), nn.Tanh())
         self.message_function = nn.Linear(memory_dim * 2 + message_dim, memory_dim)
         self.memory_updater = nn.GRUCell(memory_dim, memory_dim)
@@ -41,37 +41,44 @@ class TGNStyleRiskModel(nn.Module):
 
     def forward(self, batch: TemporalData) -> Tensor:
         """Score events from current memory and elapsed-time encodings."""
-        source_memory = self.memory[batch.src]
-        destination_memory = self.memory[batch.dst]
-        current_time = batch.t.to(dtype=torch.float32) / 1e9
-        elapsed_hours = ((current_time - self.last_time[batch.src]) / 3600).clamp(0, 24)
-        temporal_source = source_memory + self.time_encoder(elapsed_hours[:, None])
+        source_memory, destination_memory = self._candidate_memory(batch)
+        temporal_source = source_memory + self.time_encoder(
+            self._elapsed_hours(batch)[:, None]
+        )
         message = torch.log1p(batch.msg.abs())
         return self.scorer(
             torch.cat((temporal_source, destination_memory, message), -1)
         ).squeeze(-1)
 
+    def _candidate_memory(self, batch: TemporalData) -> tuple[Tensor, Tensor]:
+        """Compute differentiable endpoint states without mutating memory."""
+        source = self.memory[batch.src]
+        destination = self.memory[batch.dst]
+        message = torch.log1p(batch.msg.abs())
+        source_message = self.message_function(
+            torch.cat((source, destination, message), -1)
+        )
+        destination_message = self.message_function(
+            torch.cat((destination, source, message), -1)
+        )
+        return (
+            self.memory_updater(source_message, source),
+            self.memory_updater(destination_message, destination),
+        )
+
+    def _elapsed_hours(self, batch: TemporalData) -> Tensor:
+        """Subtract integer nanoseconds before converting the small delta."""
+        elapsed_ns = batch.t - self.last_time[batch.src]
+        return (elapsed_ns.to(dtype=torch.float32) / 3.6e12).clamp(0, 24)
+
     def update_state(self, batch: TemporalData) -> None:
         """Aggregate transaction messages into the two endpoint memory states."""
         with torch.no_grad():
-            source = self.memory[batch.src]
-            destination = self.memory[batch.dst]
-            message = torch.log1p(batch.msg.abs())
-            source_message = self.message_function(
-                torch.cat((source, destination, message), -1)
-            )
-            destination_message = self.message_function(
-                torch.cat((destination, source, message), -1)
-            )
-            self.memory.index_copy_(
-                0, batch.src, self.memory_updater(source_message, source)
-            )
-            self.memory.index_copy_(
-                0, batch.dst, self.memory_updater(destination_message, destination)
-            )
-            event_time = batch.t.to(dtype=torch.float32) / 1e9
-            self.last_time.index_copy_(0, batch.src, event_time)
-            self.last_time.index_copy_(0, batch.dst, event_time)
+            source, destination = self._candidate_memory(batch)
+            self.memory.index_copy_(0, batch.src, source)
+            self.memory.index_copy_(0, batch.dst, destination)
+            self.last_time.index_copy_(0, batch.src, batch.t)
+            self.last_time.index_copy_(0, batch.dst, batch.t)
 
     def reset_state(self) -> None:
         """Clear memory before AMLGraphX replays one explicit history sequence."""

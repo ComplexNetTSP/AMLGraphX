@@ -1,5 +1,21 @@
 # AMLGraphX 当前进度
 
+## PR #9 temporal experiment review fixes
+
+- Snapshot 和 event-stream predictor 现支持独立的 train/validation/test target mask，
+  同时保留原共享 mask 参数作为兼容 fallback；event prediction 使用 test mask，使
+  history-only warm-up batch 只更新状态、不产生风险分数。
+- `Experiment` 在同一次 test prediction loader 遍历中收集分数和标签，避免 shuffle
+  或随机采样造成二次遍历错配；snapshot 结果收集同时接受 `SnapshotBatch` 和直接的
+  PyG `Data`。
+- IBM 静态滑动窗口示例将 target mask 精确裁剪到 split 的半开区间，跨边界窗口只保留
+  split 外节点作为上下文。JODIE/TGN 教学示例的候选 memory update 进入可微打分路径，
+  持久状态仍在 backward 后提交；elapsed time 改为整数纳秒相减后再转换。
+- 回归测试覆盖 stage mask、history-only prediction、单遍 prediction collection、直接
+  snapshot `Data`、窗口边界、状态更新梯度和纳秒精度。
+
+更新时间：2026-09-11
+
 ## Strict causal link/event-stream sampling
 
 - 新增 `amlgraphx.sampling.causal_event_stream_loader()`：为有状态模型按完整

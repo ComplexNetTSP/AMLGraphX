@@ -8,9 +8,11 @@ from torch_geometric.loader import DataLoader
 
 from amlgraphx.data import SnapshotBatch, event_stream_loader
 from amlgraphx.experiments import BinaryRiskTask, Experiment, TabularExperiment
+from amlgraphx.experiments.experiment import _predict_and_collect
 from amlgraphx.training import (
     ModelContractError,
     SnapshotBinaryEdgePredictor,
+    SnapshotBinaryNodePredictor,
     StaticBinaryEdgePredictor,
 )
 
@@ -154,6 +156,64 @@ def test_event_experiment_keeps_one_score_per_temporal_event() -> None:
 
     assert result.predictions.labels.numel() == 5
     assert result.predictions.scores.numel() == 5
+
+
+def test_prediction_collection_uses_one_pass_and_direct_snapshot_data() -> None:
+    """A direct snapshot's scores stay paired with labels in one traversal."""
+
+    class OnePass:
+        def __init__(self, batch: Data) -> None:
+            self.batch = batch
+            self.iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            if self.iterations > 1:
+                raise AssertionError("prediction collection iterated twice")
+            yield self.batch
+
+    graph = _node_data()
+    graph.test_targets = torch.tensor([False, True, False, True])
+    predictor = SnapshotBinaryNodePredictor(
+        _NodeModel(), nn.BCEWithLogitsLoss(), metrics={}, test_mask_attr="test_targets"
+    )
+    loader = OnePass(graph)
+
+    result = _predict_and_collect(
+        predictor,
+        loader,
+        BinaryRiskTask("snapshot", "node", test_mask_attr="test_targets"),
+    )
+
+    assert loader.iterations == 1
+    assert result.labels.tolist() == [1, 1]
+    assert result.scores.shape == (2,)
+
+
+def test_experiment_wires_stage_masks_to_temporal_predictors() -> None:
+    """BinaryRiskTask stage selectors reach snapshot and event predictors."""
+    task_options = {
+        "train_mask_attr": "train_targets",
+        "validation_mask_attr": "validation_targets",
+        "test_mask_attr": "test_targets",
+    }
+    snapshot = Experiment(
+        _NodeModel(),
+        task=BinaryRiskTask("snapshot", "node", **task_options),
+        trainer_kwargs={"logger": False, "enable_progress_bar": False},
+    ).predictor
+    event = Experiment(
+        _NodeModel(),
+        task=BinaryRiskTask("event_stream", "event", **task_options),
+        trainer_kwargs={"logger": False, "enable_progress_bar": False},
+    ).predictor
+
+    assert snapshot.train_mask_attr == "train_targets"
+    assert snapshot.validation_mask_attr == "validation_targets"
+    assert snapshot.test_mask_attr == "test_targets"
+    assert event.train_mask_attr == "train_targets"
+    assert event.validation_mask_attr == "validation_targets"
+    assert event.test_mask_attr == "test_targets"
 
 
 def test_tabular_experiment_fits_only_train_data_and_returns_risk_scores() -> None:

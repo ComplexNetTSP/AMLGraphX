@@ -35,7 +35,7 @@ class JODIEStyleRiskModel(nn.Module):
         """Create account memory, a time projection, and a transaction scorer."""
         super().__init__()
         self.register_buffer("memory", torch.zeros(num_accounts, embedding_dim))
-        self.register_buffer("last_time", torch.zeros(num_accounts))
+        self.register_buffer("last_time", torch.zeros(num_accounts, dtype=torch.long))
         self.time_projection = nn.Linear(1, embedding_dim)
         self.update = nn.GRUCell(embedding_dim * 2 + message_dim, embedding_dim)
         self.scorer = nn.Sequential(
@@ -46,30 +46,39 @@ class JODIEStyleRiskModel(nn.Module):
 
     def forward(self, batch: TemporalData) -> Tensor:
         """Score each event before its account memories are updated."""
-        source_memory = self.memory[batch.src]
-        destination_memory = self.memory[batch.dst]
-        current_time = batch.t.to(dtype=torch.float32) / 1e9
-        elapsed_hours = ((current_time - self.last_time[batch.src]) / 3600).clamp(0, 24)
-        projected_source = source_memory + self.time_projection(elapsed_hours[:, None])
+        source_memory, destination_memory = self._candidate_memory(batch)
+        projected_source = source_memory + self.time_projection(
+            self._elapsed_hours(batch)[:, None]
+        )
         message = torch.log1p(batch.msg.abs())
         features = torch.cat((projected_source, destination_memory, message), dim=-1)
         return self.scorer(features).squeeze(-1)
 
+    def _candidate_memory(self, batch: TemporalData) -> tuple[Tensor, Tensor]:
+        """Compute differentiable endpoint states without mutating memory."""
+        source = self.memory[batch.src]
+        destination = self.memory[batch.dst]
+        message = torch.log1p(batch.msg.abs())
+        source_input = torch.cat((source, destination, message), dim=-1)
+        destination_input = torch.cat((destination, source, message), dim=-1)
+        return (
+            self.update(source_input, source),
+            self.update(destination_input, destination),
+        )
+
+    def _elapsed_hours(self, batch: TemporalData) -> Tensor:
+        """Subtract integer nanoseconds before converting the small delta."""
+        elapsed_ns = batch.t - self.last_time[batch.src]
+        return (elapsed_ns.to(dtype=torch.float32) / 3.6e12).clamp(0, 24)
+
     def update_state(self, batch: TemporalData) -> None:
         """Apply the post-prediction JODIE-style update required by AMLGraphX."""
         with torch.no_grad():
-            source = self.memory[batch.src]
-            destination = self.memory[batch.dst]
-            message = torch.log1p(batch.msg.abs())
-            source_input = torch.cat((source, destination, message), dim=-1)
-            destination_input = torch.cat((destination, source, message), dim=-1)
-            self.memory.index_copy_(0, batch.src, self.update(source_input, source))
-            self.memory.index_copy_(
-                0, batch.dst, self.update(destination_input, destination)
-            )
-            event_time = batch.t.to(dtype=torch.float32) / 1e9
-            self.last_time.index_copy_(0, batch.src, event_time)
-            self.last_time.index_copy_(0, batch.dst, event_time)
+            source, destination = self._candidate_memory(batch)
+            self.memory.index_copy_(0, batch.src, source)
+            self.memory.index_copy_(0, batch.dst, destination)
+            self.last_time.index_copy_(0, batch.src, batch.t)
+            self.last_time.index_copy_(0, batch.dst, batch.t)
 
     def reset_state(self) -> None:
         """Clear state before AMLGraphX replays one explicit history sequence."""
