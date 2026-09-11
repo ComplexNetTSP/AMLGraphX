@@ -63,6 +63,37 @@ def test_event_example_updates_are_trainable_and_keep_nanosecond_precision(
     assert all(parameter.grad is not None for parameter in update_parameters)
 
 
+@pytest.mark.parametrize("model_type", [JODIEStyleRiskModel, TGNStyleRiskModel])
+def test_event_example_same_timestamp_updates_are_order_invariant(
+    model_type: type[torch.nn.Module],
+) -> None:
+    """Equal-time endpoint updates aggregate once per account deterministically."""
+    kwargs = _memory_size(model_type)
+    first = model_type(num_accounts=3, message_dim=1, **kwargs)
+    second = model_type(num_accounts=3, message_dim=1, **kwargs)
+    second.load_state_dict(first.state_dict())
+    batch = TemporalData(
+        src=torch.tensor([0, 1, 0]),
+        dst=torch.tensor([1, 0, 2]),
+        t=torch.tensor([10, 10, 10]),
+        msg=torch.tensor([[1.0], [2.0], [3.0]]),
+        y=torch.tensor([0, 1, 0]),
+    )
+    reversed_batch = TemporalData(
+        src=batch.src.flip(0),
+        dst=batch.dst.flip(0),
+        t=batch.t.flip(0),
+        msg=batch.msg.flip(0),
+        y=batch.y.flip(0),
+    )
+
+    first.update_state(batch)
+    second.update_state(reversed_batch)
+
+    assert torch.equal(first.last_time, second.last_time)
+    assert torch.allclose(first.memory, second.memory)
+
+
 def _memory_size(model_type: type[torch.nn.Module]) -> dict[str, int]:
     """Use the example-specific name for the same compact state dimension."""
     if model_type is JODIEStyleRiskModel:

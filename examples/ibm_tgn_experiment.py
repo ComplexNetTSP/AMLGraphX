@@ -41,7 +41,9 @@ class TGNStyleRiskModel(nn.Module):
 
     def forward(self, batch: TemporalData) -> Tensor:
         """Score events from current memory and elapsed-time encodings."""
-        source_memory, destination_memory = self._candidate_memory(batch)
+        source_memory, destination_memory = self._candidate_memory(
+            batch.src, batch.dst, batch.msg
+        )
         temporal_source = source_memory + self.time_encoder(
             self._elapsed_hours(batch)[:, None]
         )
@@ -50,11 +52,13 @@ class TGNStyleRiskModel(nn.Module):
             torch.cat((temporal_source, destination_memory, message), -1)
         ).squeeze(-1)
 
-    def _candidate_memory(self, batch: TemporalData) -> tuple[Tensor, Tensor]:
+    def _candidate_memory(
+        self, src: Tensor, dst: Tensor, message: Tensor
+    ) -> tuple[Tensor, Tensor]:
         """Compute differentiable endpoint states without mutating memory."""
-        source = self.memory[batch.src]
-        destination = self.memory[batch.dst]
-        message = torch.log1p(batch.msg.abs())
+        source = self.memory[src]
+        destination = self.memory[dst]
+        message = torch.log1p(message.abs())
         source_message = self.message_function(
             torch.cat((source, destination, message), -1)
         )
@@ -74,11 +78,24 @@ class TGNStyleRiskModel(nn.Module):
     def update_state(self, batch: TemporalData) -> None:
         """Aggregate transaction messages into the two endpoint memory states."""
         with torch.no_grad():
-            source, destination = self._candidate_memory(batch)
-            self.memory.index_copy_(0, batch.src, source)
-            self.memory.index_copy_(0, batch.dst, destination)
-            self.last_time.index_copy_(0, batch.src, batch.t)
-            self.last_time.index_copy_(0, batch.dst, batch.t)
+            for timestamp in torch.unique_consecutive(batch.t):
+                selected = batch.t == timestamp
+                source, destination = self._candidate_memory(
+                    batch.src[selected], batch.dst[selected], batch.msg[selected]
+                )
+                endpoint_ids = torch.cat((batch.src[selected], batch.dst[selected]))
+                endpoint_states = torch.cat((source, destination))
+                account_ids, inverse = torch.unique(
+                    endpoint_ids, sorted=True, return_inverse=True
+                )
+                aggregated = endpoint_states.new_zeros(
+                    (account_ids.numel(), endpoint_states.shape[1])
+                )
+                aggregated.index_add_(0, inverse, endpoint_states)
+                counts = torch.bincount(inverse, minlength=account_ids.numel())
+                aggregated /= counts.to(dtype=aggregated.dtype)[:, None]
+                self.memory.index_copy_(0, account_ids, aggregated)
+                self.last_time.index_fill_(0, account_ids, timestamp)
 
     def reset_state(self) -> None:
         """Clear memory before AMLGraphX replays one explicit history sequence."""

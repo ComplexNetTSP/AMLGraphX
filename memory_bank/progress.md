@@ -13,6 +13,8 @@
   持久状态仍在 backward 后提交；elapsed time 改为整数纳秒相减后再转换。
 - 回归测试覆盖 stage mask、history-only prediction、单遍 prediction collection、直接
   snapshot `Data`、窗口边界、状态更新梯度和纳秒精度。
+- JODIE/TGN 在同一 timestamp group 内按账户聚合 source/destination 候选状态，再以
+  排序后的账户 ID 一次性提交 memory；同一组事件的输入顺序不再改变状态结果。
 
 更新时间：2026-09-11
 
