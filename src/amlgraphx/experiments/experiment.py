@@ -456,6 +456,11 @@ def _dummy_data(batch: Data) -> Data:
         elif name in {
             "edge_label",
             "edge_label_time",
+            "event_id",
+            "event_msg",
+            "event_time",
+            "event_y",
+            "target_event_mask",
             "target_edge_mask",
             "target_edge_time",
         }:

@@ -1,5 +1,33 @@
 # AMLGraphX 当前进度
 
+## Strict causal link/event-stream sampling
+
+- 新增 `amlgraphx.sampling.causal_event_stream_loader()`：为有状态模型按完整
+  timestamp group 产出原生 `TemporalData`，因此同一时刻事件会先共同预测、再共同
+  进入后续历史。可选 `history` 会以 `target_event_mask=False` 作为 warm-up 事件；
+  validation 可重放 train，test 可重放 train + validation，而不计算 warm-up 的
+  loss、metric 或风险分数。`EventStreamBinaryPredictor` 现明确支持这种 history-only
+  batch，并保持训练阶段的 backward 后 state update。
+- 新增 `causal_event_neighbor_loader()`：为无状态模型复用 PyG
+  `LinkNeighborLoader`，以每个 target 的前一纳秒作为 sampling cutoff。返回原生
+  `Data`，历史上下文在 `edge_index`/`edge_time`/`edge_attr`，target 在
+  `edge_label_index`，并显式提供 `event_y`、`event_time`、`event_msg`、`event_id`
+  和 `target_event_mask`，可通过 `BinaryRiskTask` 与 `Experiment` 对齐。equal-time、
+  target 自身和未来事件均不能成为 message-passing context。
+- 新增 `recent_event_neighbors()`：仅校验并返回 PyG 原生 `LastNeighborLoader`，供
+  研究员在自己的 `update_state(batch)` 中按 predict-before-insert 协议维护近期交互；
+  不包装或绑定研究员的 TGN/JODIE 模型实现。
+- 更新 JODIE/TGN IBM 示例使用 stateful warm-up 语义，新增
+  `examples/ibm_event_stream_neighbor_sampling.py` 展示 stateless local-history
+  模型与 train/validation/test target masks。三个示例均避免把同一 timestamp 拆到
+  不同 split。
+- 新增合成测试覆盖 timestamp 原子组、warm-up 不评分、同 timestamp/target/future
+  context 排除、原生 recent-neighbor index 与 Experiment score/label 对齐。新的
+  stateless IBM 示例已在 HI-Small 1,200 条跨时间段事件、GPU、1 epoch 真实跑通，产生
+  216 条冻结 test 风险分数；JODIE stateful warm-up 示例也以相同规模跑通。
+
+更新时间：2026-09-11
+
 ## Strict causal time-aware static graph sampling
 
 - 新增 `amlgraphx.sampling.causal_static_node_loader()` 与

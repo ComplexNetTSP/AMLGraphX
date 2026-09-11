@@ -3,8 +3,9 @@
 The example is intentionally an educational adaptation, not a claim of a
 paper-faithful JODIE reproduction. It keeps the central JODIE idea: account
 embeddings are projected through elapsed time and updated after every observed
-transaction. AMLGraphX owns data loading, event construction, chronological
-batching, model-contract validation, training, and risk-score metrics.
+transaction. AMLGraphX owns data loading, event construction, strict
+timestamp-group batching, train-history warm-up, model-contract validation,
+training, and risk-score metrics.
 """
 
 from __future__ import annotations
@@ -18,11 +19,11 @@ import torch
 from torch import Tensor, nn
 from torch_geometric.data import TemporalData
 
-from amlgraphx.data import event_stream_loader
 from amlgraphx.datasets import load_dataset
 from amlgraphx.evaluation import Precision, Recall
 from amlgraphx.experiments import BinaryRiskTask, Experiment
 from amlgraphx.graph import GraphFeatureSpec, prepare_pyg_graph
+from amlgraphx.sampling import causal_event_stream_loader
 
 
 class JODIEStyleRiskModel(nn.Module):
@@ -71,7 +72,7 @@ class JODIEStyleRiskModel(nn.Module):
             self.last_time.index_copy_(0, batch.dst, event_time)
 
     def reset_state(self) -> None:
-        """Start each AMLGraphX split sequence with an explicit empty history."""
+        """Clear state before AMLGraphX replays one explicit history sequence."""
         self.memory.zero_()
         self.last_time.zero_()
 
@@ -129,10 +130,14 @@ def slice_events(events: TemporalData, start: int, end: int) -> TemporalData:
 def split_events(
     events: TemporalData,
 ) -> tuple[TemporalData, TemporalData, TemporalData]:
-    """Use chronological 60/20/20 event intervals for train/validation/test."""
+    """Use chronological 60/20/20 intervals without splitting equal timestamps."""
     count = events.num_events
-    train_end = 3 * count // 5
-    validation_end = 4 * count // 5
+    train_end = _next_timestamp_boundary(events.t, 3 * count // 5)
+    validation_end = _next_timestamp_boundary(events.t, 4 * count // 5)
+    if not 0 < train_end < validation_end < count:
+        raise ValueError(
+            "event stream needs three non-empty timestamp-separated splits"
+        )
     return (
         slice_events(events, 0, train_end),
         slice_events(events, train_end, validation_end),
@@ -140,25 +145,41 @@ def split_events(
     )
 
 
+def _next_timestamp_boundary(event_time: Tensor, index: int) -> int:
+    """Move a nominal split end past its complete equal-timestamp group."""
+    while (
+        index < event_time.numel()
+        and index > 0
+        and event_time[index] == event_time[index - 1]
+    ):
+        index += 1
+    return index
+
+
 def run(args: argparse.Namespace) -> None:
     """Create event loaders, run Experiment, and print held-out AML metrics."""
     with TemporaryDirectory(prefix="amlgraphx-ibm-jodie-") as directory:
         events = load_events(Path(directory), args.limit)
         train, validation, test = split_events(events)
+        test_history = events.index_select(
+            torch.arange(train.num_events + validation.num_events)
+        )
         model = JODIEStyleRiskModel(events.num_nodes, events.msg.shape[1])
         experiment = Experiment(
             model,
-            task=BinaryRiskTask("event_stream", "event"),
+            task=BinaryRiskTask(
+                "event_stream", "event", target_mask_attr="target_event_mask"
+            ),
             metrics={"precision": Precision(), "recall": Recall()},
             trainer_kwargs={"max_epochs": args.epochs, "accelerator": "auto"},
             evaluation_kwargs={"top_fractions": (0.01,)},
         )
         result = experiment.run(
-            train_dataloaders=event_stream_loader(train, batch_size=args.batch_size),
-            validation_dataloaders=event_stream_loader(
-                validation, batch_size=args.batch_size
+            train_dataloaders=causal_event_stream_loader(train),
+            validation_dataloaders=causal_event_stream_loader(
+                validation, history=train
             ),
-            test_dataloaders=event_stream_loader(test, batch_size=args.batch_size),
+            test_dataloaders=causal_event_stream_loader(test, history=test_history),
         )
     print("Lightning test metrics:", result.test_metrics)
     print("AML risk metrics:", result.risk_metrics)
@@ -169,7 +190,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=12_000)
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch-size", type=int, default=256)
     return parser.parse_args()
 
 

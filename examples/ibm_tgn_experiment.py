@@ -17,11 +17,11 @@ import torch
 from torch import Tensor, nn
 from torch_geometric.data import TemporalData
 
-from amlgraphx.data import event_stream_loader
 from amlgraphx.datasets import load_dataset
 from amlgraphx.evaluation import Precision, Recall
 from amlgraphx.experiments import BinaryRiskTask, Experiment
 from amlgraphx.graph import GraphFeatureSpec, prepare_pyg_graph
+from amlgraphx.sampling import causal_event_stream_loader
 
 
 class TGNStyleRiskModel(nn.Module):
@@ -74,7 +74,7 @@ class TGNStyleRiskModel(nn.Module):
             self.last_time.index_copy_(0, batch.dst, event_time)
 
     def reset_state(self) -> None:
-        """Reset memory at each explicitly independent train/validation/test run."""
+        """Clear memory before AMLGraphX replays one explicit history sequence."""
         self.memory.zero_()
         self.last_time.zero_()
 
@@ -132,9 +132,13 @@ def slice_events(events: TemporalData, start: int, end: int) -> TemporalData:
 def split_events(
     events: TemporalData,
 ) -> tuple[TemporalData, TemporalData, TemporalData]:
-    """Make chronological 60/20/20 event splits without shuffling interactions."""
-    train_end = 3 * events.num_events // 5
-    validation_end = 4 * events.num_events // 5
+    """Make 60/20/20 splits without shuffling or splitting equal timestamps."""
+    train_end = _next_timestamp_boundary(events.t, 3 * events.num_events // 5)
+    validation_end = _next_timestamp_boundary(events.t, 4 * events.num_events // 5)
+    if not 0 < train_end < validation_end < events.num_events:
+        raise ValueError(
+            "event stream needs three non-empty timestamp-separated splits"
+        )
     return (
         slice_events(events, 0, train_end),
         slice_events(events, train_end, validation_end),
@@ -142,25 +146,41 @@ def split_events(
     )
 
 
+def _next_timestamp_boundary(event_time: Tensor, index: int) -> int:
+    """Move a nominal split end past its complete equal-timestamp group."""
+    while (
+        index < event_time.numel()
+        and index > 0
+        and event_time[index] == event_time[index - 1]
+    ):
+        index += 1
+    return index
+
+
 def run(args: argparse.Namespace) -> None:
     """Train the lightweight temporal model and report test risk scores."""
     with TemporaryDirectory(prefix="amlgraphx-ibm-tgn-") as directory:
         events = load_events(Path(directory), args.limit)
         train, validation, test = split_events(events)
+        test_history = events.index_select(
+            torch.arange(train.num_events + validation.num_events)
+        )
         model = TGNStyleRiskModel(events.num_nodes, events.msg.shape[1])
         experiment = Experiment(
             model,
-            task=BinaryRiskTask("event_stream", "event"),
+            task=BinaryRiskTask(
+                "event_stream", "event", target_mask_attr="target_event_mask"
+            ),
             metrics={"precision": Precision(), "recall": Recall()},
             trainer_kwargs={"max_epochs": args.epochs, "accelerator": "auto"},
             evaluation_kwargs={"top_fractions": (0.01,)},
         )
         result = experiment.run(
-            train_dataloaders=event_stream_loader(train, batch_size=args.batch_size),
-            validation_dataloaders=event_stream_loader(
-                validation, batch_size=args.batch_size
+            train_dataloaders=causal_event_stream_loader(train),
+            validation_dataloaders=causal_event_stream_loader(
+                validation, history=train
             ),
-            test_dataloaders=event_stream_loader(test, batch_size=args.batch_size),
+            test_dataloaders=causal_event_stream_loader(test, history=test_history),
         )
     print("Lightning test metrics:", result.test_metrics)
     print("AML risk metrics:", result.risk_metrics)
@@ -171,7 +191,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=12_000)
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch-size", type=int, default=256)
     return parser.parse_args()
 
 

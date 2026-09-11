@@ -19,11 +19,14 @@ from .static import (
 class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
     """Train a researcher-defined binary classifier on ordered transaction events.
 
-    The wrapped model receives one PyG ``TemporalData``-style batch with
-    ``src``, ``dst``, ``t`` and optional ``msg`` fields and returns one raw
-    binary logit per event. Labels default to ``y``. Events are never silently
-    sorted: timestamps must be non-decreasing within a batch and must not move
-    backwards across batches, preventing accidental future-information access.
+    The wrapped model receives one ordered PyG event batch and returns one raw
+    binary logit per prediction target. Stateful workflows normally use
+    ``TemporalData`` fields ``src``, ``dst``, ``t``, and optional ``msg``;
+    stateless sampled workflows may instead use a PyG ``Data`` batch with
+    ``event_y`` and ``event_time`` as the target axis. Labels default to ``y``.
+    Events are never silently sorted: timestamps must be non-decreasing within
+    a batch and must not move backwards across batches, preventing accidental
+    future-information access.
 
     If the model defines ``reset_state()``, it is called at each split or
     prediction sequence start. If it defines ``update_state(batch)``, the hook
@@ -37,9 +40,12 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
         model: Researcher-defined event model accepting one event batch.
         loss: Callable accepting masked ``(logits, target)`` tensors.
         metrics: Optional named TorchMetrics instances.
-        event_mask_attr: Optional field selecting labelled events. Missing means
-            every event in the supplied batch is a target.
-        timestamp_attr: Event timestamp field, normally ``t``.
+        event_mask_attr: Optional field selecting prediction targets. A batch
+            with no selected events is history-only: it calls ``update_state``
+            without computing loss or metrics, so it can warm up validation or
+            test state.
+        timestamp_attr: Event timestamp field, normally ``t`` or
+            ``"event_time"`` for sampled local graphs.
         reset_state: Whether to call an optional model ``reset_state()`` hook.
         **kwargs: Optimizer, scheduler, and target configuration passed to
             :class:`StaticBinaryNodePredictor`.
@@ -78,12 +84,16 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
     def forward(self, batch: Any) -> Tensor:
         """Return validated raw logits for every event in ``batch``."""
         logits = self.model(batch)
-        return _validate_event_logits(logits, _num_events(batch))
+        return _validate_event_logits(logits, _num_events(batch, self.target_attr))
 
     def training_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Train on one chronological event batch before updating model state."""
         del batch_idx
         loss = self._event_step(batch, self.train_metrics, "train")
+        if loss is None:
+            raise ModelContractError(
+                "training event mask must select at least one event"
+            )
         self._pending_train_batch = batch
         return loss
 
@@ -93,12 +103,12 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
             batch, self._pending_train_batch = self._pending_train_batch, None
             self._update_state(batch)
 
-    def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
+    def validation_step(self, batch: Any, batch_idx: int) -> Tensor | None:
         """Validate on one chronological event batch."""
         del batch_idx
         return self._event_step(batch, self.validation_metrics, "val")
 
-    def test_step(self, batch: Any, batch_idx: int) -> Tensor:
+    def test_step(self, batch: Any, batch_idx: int) -> Tensor | None:
         """Test on one chronological event batch."""
         del batch_idx
         return self._event_step(batch, self.test_metrics, "test")
@@ -109,7 +119,12 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
         """Score one event batch, then apply its optional state update hook."""
         del batch_idx, dataloader_idx
         self._check_event_order(batch, "predict")
-        scores = torch.sigmoid(self.forward(batch))
+        target = self._target(batch)
+        mask = _event_mask(batch, self.event_mask_attr, target.numel(), target.device)
+        if bool(mask.any()):
+            scores = torch.sigmoid(self.forward(batch))
+        else:
+            scores = torch.full_like(target, float("nan"), dtype=torch.float32)
         self._update_state(batch)
         return scores
 
@@ -130,16 +145,21 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
         """Reset event order and optional model state before prediction."""
         self._start_sequence("predict")
 
-    def _event_step(self, batch: Any, metrics: Any, stage: str) -> Tensor:
+    def _event_step(self, batch: Any, metrics: Any, stage: str) -> Tensor | None:
         """Validate order, score events, compute loss, and update state last."""
         self._check_event_order(batch, stage)
         target = self._target(batch)
-        logits = self.forward(batch)
         mask = _event_mask(batch, self.event_mask_attr, target.numel(), target.device)
+        if not bool(mask.any()):
+            if stage == "train":
+                raise ModelContractError(
+                    "training event mask must select at least one event"
+                )
+            self._update_state(batch)
+            return None
+        logits = self.forward(batch)
         masked_logits = logits[mask]
         masked_target = target[mask].to(dtype=logits.dtype)
-        if masked_target.numel() == 0:
-            raise ModelContractError("event mask must select at least one event")
         loss = self.loss_fn(masked_logits, masked_target)
         if not isinstance(loss, Tensor) or loss.ndim != 0:
             raise ModelContractError("loss must return a scalar torch.Tensor")
@@ -200,8 +220,13 @@ class EventStreamBinaryPredictor(StaticBinaryNodePredictor):
             update(batch)
 
 
-def _num_events(batch: Any) -> int:
-    """Infer event count from a TemporalData-style timestamp or source field."""
+def _num_events(batch: Any, target_attr: str) -> int:
+    """Infer the prediction axis from labels, then ordinary event fields."""
+    value = getattr(batch, target_attr, None)
+    if value is None and isinstance(batch, Mapping):
+        value = batch.get(target_attr)
+    if isinstance(value, Tensor) and value.ndim == 1 and value.numel() > 0:
+        return int(value.numel())
     value = getattr(batch, "t", None)
     if value is None and isinstance(batch, Mapping):
         value = batch.get("t")
