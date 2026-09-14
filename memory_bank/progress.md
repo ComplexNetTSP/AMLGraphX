@@ -1,5 +1,126 @@
 # AMLGraphX 当前进度
 
+## PR #9 temporal experiment review fixes
+
+- Snapshot 和 event-stream predictor 现支持独立的 train/validation/test target mask，
+  同时保留原共享 mask 参数作为兼容 fallback；event prediction 使用 test mask，使
+  history-only warm-up batch 只更新状态、不产生风险分数。
+- `Experiment` 在同一次 test prediction loader 遍历中收集分数和标签，避免 shuffle
+  或随机采样造成二次遍历错配；snapshot 结果收集同时接受 `SnapshotBatch` 和直接的
+  PyG `Data`。
+- IBM 静态滑动窗口示例将 target mask 精确裁剪到 split 的半开区间，跨边界窗口只保留
+  split 外节点作为上下文。JODIE/TGN 教学示例的候选 memory update 进入可微打分路径，
+  持久状态仍在 backward 后提交；elapsed time 改为整数纳秒相减后再转换。
+- 回归测试覆盖 stage mask、history-only prediction、单遍 prediction collection、直接
+  snapshot `Data`、窗口边界、状态更新梯度和纳秒精度。
+- JODIE/TGN 在同一 timestamp group 内按账户聚合 source/destination 候选状态，再以
+  排序后的账户 ID 一次性提交 memory；同一组事件的输入顺序不再改变状态结果。
+
+更新时间：2026-09-11
+
+## Strict causal link/event-stream sampling
+
+- 新增 `amlgraphx.sampling.causal_event_stream_loader()`：为有状态模型按完整
+  timestamp group 产出原生 `TemporalData`，因此同一时刻事件会先共同预测、再共同
+  进入后续历史。可选 `history` 会以 `target_event_mask=False` 作为 warm-up 事件；
+  validation 可重放 train，test 可重放 train + validation，而不计算 warm-up 的
+  loss、metric 或风险分数。`EventStreamBinaryPredictor` 现明确支持这种 history-only
+  batch，并保持训练阶段的 backward 后 state update。
+- 新增 `causal_event_neighbor_loader()`：为无状态模型复用 PyG
+  `LinkNeighborLoader`，以每个 target 的前一纳秒作为 sampling cutoff。返回原生
+  `Data`，历史上下文在 `edge_index`/`edge_time`/`edge_attr`，target 在
+  `edge_label_index`，并显式提供 `event_y`、`event_time`、`event_msg`、`event_id`
+  和 `target_event_mask`，可通过 `BinaryRiskTask` 与 `Experiment` 对齐。equal-time、
+  target 自身和未来事件均不能成为 message-passing context。
+- 新增 `recent_event_neighbors()`：仅校验并返回 PyG 原生 `LastNeighborLoader`，供
+  研究员在自己的 `update_state(batch)` 中按 predict-before-insert 协议维护近期交互；
+  不包装或绑定研究员的 TGN/JODIE 模型实现。
+- 更新 JODIE/TGN IBM 示例使用 stateful warm-up 语义，新增
+  `examples/ibm_event_stream_neighbor_sampling.py` 展示 stateless local-history
+  模型与 train/validation/test target masks。三个示例均避免把同一 timestamp 拆到
+  不同 split。
+- 新增合成测试覆盖 timestamp 原子组、warm-up 不评分、同 timestamp/target/future
+  context 排除、原生 recent-neighbor index 与 Experiment score/label 对齐。新的
+  stateless IBM 示例已在 HI-Small 1,200 条跨时间段事件、GPU、1 epoch 真实跑通，产生
+  216 条冻结 test 风险分数；JODIE stateful warm-up 示例也以相同规模跑通。
+
+更新时间：2026-09-11
+
+## Strict causal time-aware static graph sampling
+
+- 新增 `amlgraphx.sampling.causal_static_node_loader()` 与
+  `causal_static_edge_loader()`：full graph 按显式 split mask 选 target；可选
+  sliding window 先限制 lookback，再按每个 target 的时间采样局部邻域。两者均使用
+  PyG 原生 `Data` batch，不引入模型或自定义 batch 类型。
+- 时间不变量为严格过去：采样 cutoff 使用 target timestamp 的前一纳秒，因此同一
+  timestamp 与未来节点/交易边均不能成为 context。节点 batch 以
+  `target_node_mask` 标记 seed；账户边 batch 以 `edge_label`、
+  `edge_label_index` 和 `target_edge_mask` 对齐交易风险标签，能直接交给
+  `BinaryRiskTask`、`Experiment` 和 AML ranking metrics。目标边不会进入其自己的
+  message-passing context。
+- `StaticGraphWindowDataset` 现在保留 full-graph `n_id` 和 `e_id`，使窗口和
+  sampled prediction 能追溯至原始图实体；其原有窗口级行为保持不变。
+- `examples/ibm_transaction_static_experiment.py` 新增 `sampled-full` 与
+  `sampled-windows` 模式；已用 IBM HI-Small 1,200 条样本、1 epoch 实跑
+  `sampled-windows`，得到 84 条冻结 test 风险分数和完整 AML metrics。
+- 新增合成测试覆盖 future/equal-time 排除、window split 空交集跳过、edge target
+  排除与 Experiment score/label 对齐；全量验证 `130 passed`。
+
+更新时间：2026-09-11
+
+## PyG sampling backend
+
+- 新增与项目 `torch 2.13.x + CUDA 13.2` 精确匹配的
+  `pyg-lib==0.9.0+pt213cu132`，通过显式 uv flat index 从 PyG 官方 wheel
+  仓库解析；同时把 Torch 限制在 `<2.14`，避免二进制 ABI 不匹配。
+- 已验证 PyG 的 `NeighborLoader`、带 node time 的 temporal neighbor sampling，
+  以及 `LinkNeighborLoader` 的 edge-time sampling 均可执行；完整 Python 测试
+  `124 passed`。
+
+更新时间：2026-09-09
+
+## Model-agnostic experiment lifecycle
+
+- 新增 `amlgraphx.experiments.Experiment` 与 `BinaryRiskTask`：研究者先显式完成
+  dataset loading、graph construction、temporal split 和 loader；再只提交自己的
+  PyTorch model 和 `node`/`edge`/`event` target contract。`Experiment` 在任何
+  optimizer step 前从首个训练 batch 生成小型 structural dummy，验证模型输入和每个
+  target 的一个 binary logit 输出。
+- `Experiment.run()` 固定 `fit(train, validation) -> test -> predict(test) -> AML
+  risk metrics` 生命周期；接受任意 named TorchMetrics mapping，默认保留 Lightning
+  tqdm progress bar 与 validation metrics，且不隐式写 checkpoint 或 tracking files。
+  测试预测按 event batch 对齐，避免 Lightning 对 `TemporalDataLoader` 预测输出的通用
+  collection 处理改变 event-score 对应关系。
+- `TabularExperiment` 为 sklearn 风格 estimator 提供同一 frozen-test score boundary：
+  仅对 train array 调用 `fit`，并从 `predict_proba`、`decision_function` 或 `predict`
+  读取一维 risk score；额外 callable metrics 可自由组合。
+- 新增 account graph 的 `StaticBinaryEdgePredictor` 和
+  `SnapshotBinaryEdgePredictor`；account static/snapshot 交易标签可使用 `edge_y` 和
+  edge mask 训练。`SnapshotBinaryNodePredictor` 现在也可读取 `SnapshotBatch.target`。
+- 新增三个临时 IBM HI-Small 示例：`ibm_transaction_static_experiment.py` 展示 full
+  graph masks 与 causal time windows；`ibm_jodie_experiment.py` 与
+  `ibm_tgn_experiment.py` 分别演示 JODIE-style projection/update 与 TGN-style
+  memory/message update。两个 temporal 示例是轻量教学实现，不声称 paper-faithful
+  benchmark。每个示例使用 `TemporaryDirectory` 并在退出时删除下载数据。
+- 新增合成 Experiment/edge/snapshot contract tests；真实 smoke tests 已用 IBM
+  HI-Small 1,000--12,000 temporal-band transactions、1 epoch 跑通 static full/window、
+  JODIE-style 和 TGN-style path。
+
+更新时间：2026-09-07
+
+## IBM small batching examples
+
+- 新增 `examples/ibm_transaction_batching.py`：使用 IBM HI-Small 的六个时间段组成
+  可控样本，演示 transaction-as-node 完整 time-aware static `Data`，以及带
+  `lookback`、`target_node_mask` 的滑动窗口 PyG `Batch`。
+- 新增 `examples/ibm_account_batching.py`：演示 account-as-node static `Data` 与
+  `target_edge_mask` 窗口 batch、五步 context 的 `SnapshotBatch`，以及 PyG
+  `TemporalDataLoader` 的连续事件 batch；每个阶段打印类型、shape、字段和少量值。
+- 两个示例默认使用 12,000 条跨六个时间段的 HI-Small 交易，`--limit 0` 可选择完整
+  数据集；已用真实缓存数据运行通过。示例保持 PyG 标准对象，不实现模型或额外抽象。
+
+更新时间：2026-09-04
+
 ## PR #8 event-state autograd fix
 
 - `EventStreamBinaryPredictor` 在训练时不再于 `training_step()` 内修改研究员模型的
